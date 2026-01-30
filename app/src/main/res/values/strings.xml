@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">APdemo</string>
+    <string name="scanning">正在扫描…</string>
+    <string name="refreshing">正在刷新…</string>
+    <string name="scan_complete">扫描完成</string>
+    <string name="permission_required">需要WiFi和位置权限才能扫描</string>
+    <string name="wifi_disabled">WiFi已关闭，请开启WiFi</string>
+    <string name="scan_failed">扫描失败</string>
+    <string name="no_results">未找到WiFi热点</string>
+    <string name="initial_hint">正在搜索WiFi信号...</string>
+    <string name="found_signals">发现 %d 个WiFi信号</string>
+</resources>
