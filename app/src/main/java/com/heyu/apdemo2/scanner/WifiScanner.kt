@@ -33,8 +33,8 @@ class WifiScanner(private val context: Context) {
     
     companion object {
         private const val TAG = "WifiScanner"
-        private const val SCAN_TIMEOUT = 10000L // 10秒超时
-        private const val MAX_SCAN_ATTEMPTS = 1 // 只扫描一次
+        private const val SCAN_TIMEOUT = 20000L // 20秒超时
+        private const val MAX_SCAN_ATTEMPTS = 3 // 3次连续扫描
     }
     
     /**
@@ -67,22 +67,22 @@ class WifiScanner(private val context: Context) {
             val isWifiEnabled = wifiManager.isWifiEnabled
             Log.d(TAG, "WiFi启用状态: $isWifiEnabled")
             if (!isWifiEnabled) {
-                val errorMsg = "WiFi未开启，请先开启WiFi"
-                Log.w(TAG, errorMsg)
-                isScanInProgress = false
-                errorCallback?.invoke(errorMsg)
-                return
+                Log.w(TAG, "WiFi未开启，尝试启用WiFi")
+                // 尝试启用WiFi
+                val wifiEnabled = enableWifi()
+                if (!wifiEnabled) {
+                    val errorMsg = "WiFi未开启且无法自动启用，请手动开启WiFi"
+                    Log.w(TAG, errorMsg)
+                    // 不直接返回错误，继续尝试扫描
+                }
             }
             
-            // 检查权限
+            // 检查权限（即使权限不足也尝试扫描）
             val hasPermissions = hasRequiredPermissions()
             Log.d(TAG, "权限检查结果: $hasPermissions")
             if (!hasPermissions) {
-                val errorMsg = "缺少必要权限，请授予WiFi和位置权限"
-                Log.w(TAG, errorMsg)
-                isScanInProgress = false
-                errorCallback?.invoke(errorMsg)
-                return
+                Log.w(TAG, "权限不足，但仍尝试进行扫描")
+                // 不直接返回错误，继续尝试扫描
             }
             
             // 执行增强扫描
@@ -96,11 +96,12 @@ class WifiScanner(private val context: Context) {
     }
     
     /**
-     * 执行单次扫描
+     * 执行增强扫描（3次连续扫描）
      */
     private fun performEnhancedScan() {
         // 使用类级别的累积数据结构
         var attemptCount = 0
+        val scanResultsList = mutableListOf<List<ScanResult>>()
         
         fun doSingleScan() {
             attemptCount++
@@ -119,7 +120,10 @@ class WifiScanner(private val context: Context) {
                         try {
                             // 获取扫描结果
                             val scanResults = wifiManager.scanResults
-                            Log.d(TAG, "获取到 ${scanResults.size} 个扫描结果")
+                            Log.d(TAG, "第${attemptCount}次扫描获取到 ${scanResults.size} 个扫描结果")
+                            
+                            // 保存本次扫描结果
+                            scanResultsList.add(scanResults)
                             
                             var newResultsCount = 0
                             // 处理每个扫描结果
@@ -141,23 +145,58 @@ class WifiScanner(private val context: Context) {
                                 }
                             }
                             
+                            // 合并相同SSID的信号（选择信号最强的）
+                            val mergedAccessPoints = mergeSameSSIDSignals(allAccessPoints)
+                            
                             // 按信号强度排序
-                            val sortedAccessPoints = allAccessPoints.sortedByDescending { it.rssi }
+                            val sortedAccessPoints = mergedAccessPoints.sortedByDescending { it.rssi }
                             
                             // 调用渐进式更新回调
-                            Log.d(TAG, "调用渐进式更新回调，总计: ${sortedAccessPoints.size} 个热点")
+                            Log.d(TAG, "调用渐进式更新回调，总计: ${sortedAccessPoints.size} 个热点（合并前: ${allAccessPoints.size} 个）")
                             progressiveCallback?.invoke(sortedAccessPoints, attemptCount, newResultsCount)
-                            Log.d(TAG, "扫描完成，累计 ${sortedAccessPoints.size} 个热点，新增 $newResultsCount 个")
+                            Log.d(TAG, "第${attemptCount}次扫描完成，累计 ${sortedAccessPoints.size} 个热点，新增 $newResultsCount 个")
                             
-                            // 完成扫描
-                            finishScan(sortedAccessPoints)
+                            // 判断是否继续下一次扫描
+                            if (attemptCount < MAX_SCAN_ATTEMPTS) {
+                                Log.d(TAG, "等待2秒后进行第${attemptCount + 1}次扫描")
+                                // 延迟2秒后进行下次扫描
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    kotlinx.coroutines.delay(2000)
+                                    doSingleScan()
+                                }
+                            } else {
+                                // 所有扫描完成
+                                Log.d(TAG, "=== 3次扫描全部完成 ===")
+                                Log.d(TAG, "总扫描次数: $attemptCount")
+                                Log.d(TAG, "累计发现热点数: ${sortedAccessPoints.size}")
+                                
+                                // 统计所有扫描结果
+                                val totalUniqueBSSIDs = mutableSetOf<String>()
+                                scanResultsList.forEach { results ->
+                                    results.forEach { result ->
+                                        if (result.SSID.isNotEmpty()) {
+                                            totalUniqueBSSIDs.add(result.BSSID)
+                                        }
+                                    }
+                                }
+                                Log.d(TAG, "去重后总热点数: ${totalUniqueBSSIDs.size}")
+                                
+                                // 完成扫描
+                                finishScan(sortedAccessPoints)
+                            }
                             
                         } catch (e: SecurityException) {
                             Log.e(TAG, "获取扫描结果时权限被拒绝", e)
-                            finishScan(emptyList())
+                            // 权限问题时不立即结束，返回当前累积结果
+                            val currentResults = allAccessPoints.sortedByDescending { it.rssi }
+                            Log.d(TAG, "权限问题，返回当前累积结果: ${currentResults.size} 个")
+                            finishScan(currentResults)
                         } catch (e: Exception) {
                             Log.e(TAG, "处理扫描结果时出错", e)
-                            finishScan(emptyList())
+                            // 一般异常时不立即结束，返回当前累积结果
+                            val currentResults = allAccessPoints.sortedByDescending { it.rssi }
+                            Log.d(TAG, "处理异常，返回当前累积结果: ${currentResults.size} 个")
+                            finishScan(currentResults)
                         }
                         
                         // 清理接收器
@@ -190,19 +229,44 @@ class WifiScanner(private val context: Context) {
             Log.d(TAG, "startScan()返回值: $scanStarted")
             
             if (!scanStarted) {
-                Log.w(TAG, "扫描启动失败")
-                try {
-                    context.unregisterReceiver(receiver)
-                } catch (e: IllegalArgumentException) {
-                    Log.w(TAG, "Receiver not registered", e)
+                Log.w(TAG, "扫描启动失败，但仍继续等待扫描结果")
+                // 不立即结束，继续等待可能的扫描结果
+                // 设置超时机制
+                CoroutineScope(Dispatchers.Main).launch {
+                    kotlinx.coroutines.delay(SCAN_TIMEOUT)
+                    Log.w(TAG, "扫描超时，强制结束本次扫描")
+                    try {
+                        context?.unregisterReceiver(receiver)
+                    } catch (e: IllegalArgumentException) {
+                        Log.w(TAG, "Receiver not registered", e)
+                    }
+                    // 即使超时也返回当前累积的结果
+                    val currentResults = allAccessPoints.sortedByDescending { it.rssi }
+                    finishScan(currentResults)
                 }
-                finishScan(emptyList())
             } else {
-                Log.d(TAG, "扫描已启动")
+                Log.d(TAG, "第${attemptCount}次扫描已启动")
+                // 设置超时保护
+                CoroutineScope(Dispatchers.Main).launch {
+                    kotlinx.coroutines.delay(SCAN_TIMEOUT)
+                    Log.w(TAG, "第${attemptCount}次扫描超时")
+                    try {
+                        context?.unregisterReceiver(receiver)
+                    } catch (e: IllegalArgumentException) {
+                        Log.w(TAG, "Receiver not registered", e)
+                    }
+                    // 继续下一次扫描或完成
+                    if (attemptCount < MAX_SCAN_ATTEMPTS) {
+                        doSingleScan()
+                    } else {
+                        val currentResults = allAccessPoints.sortedByDescending { it.rssi }
+                        finishScan(currentResults)
+                    }
+                }
             }
         }
         
-        // 开始扫描
+        // 开始第一次扫描
         doSingleScan()
     }
     
@@ -213,12 +277,23 @@ class WifiScanner(private val context: Context) {
         Log.d(TAG, "=== 扫描完成 ===")
         Log.d(TAG, "总共找到 ${accessPoints.size} 个唯一热点")
         
+        // 合并相同SSID的信号
+        val mergedAccessPoints = mergeSameSSIDSignals(accessPoints)
+        
         // 按信号强度排序（降序）
-        val sortedAccessPoints = accessPoints.sortedByDescending { it.rssi }
+        val sortedAccessPoints = mergedAccessPoints.sortedByDescending { it.rssi }
         
         // 详细记录最终结果
-        sortedAccessPoints.forEachIndexed { index, ap ->
-            Log.d(TAG, "最终结果[$index]: ${ap.ssid}, RSSI: ${ap.rssi}, 频率: ${ap.frequency}")
+        if (sortedAccessPoints.isEmpty()) {
+            Log.w(TAG, "警告：扫描结果为空列表")
+            Log.d(TAG, "累积结果集大小: ${allAccessPoints.size}")
+            Log.d(TAG, "去重集合大小: ${accumulatedResults.size}")
+            Log.d(TAG, "合并后结果集大小: ${mergedAccessPoints.size}")
+        } else {
+            Log.d(TAG, "合并前热点数: ${accessPoints.size}, 合并后热点数: ${sortedAccessPoints.size}")
+            sortedAccessPoints.forEachIndexed { index, ap ->
+                Log.d(TAG, "最终结果[$index]: ${ap.ssid}, RSSI: ${ap.rssi}, 频率: ${ap.frequency}")
+            }
         }
         
         isScanInProgress = false
@@ -266,6 +341,35 @@ class WifiScanner(private val context: Context) {
         } else {
             true
         }
+    }
+    
+    /**
+     * 合并相同SSID的WiFi信号
+     * 对于相同SSID的多个信号，选择信号最强的那个
+     * @param accessPoints 原始访问点列表
+     * @return 合并后的访问点列表
+     */
+    private fun mergeSameSSIDSignals(accessPoints: List<AccessPoint>): List<AccessPoint> {
+        if (accessPoints.isEmpty()) return emptyList()
+        
+        val ssidMap = mutableMapOf<String, AccessPoint>()
+        
+        accessPoints.forEach { ap ->
+            val currentBest = ssidMap[ap.ssid]
+            if (currentBest == null || ap.rssi > currentBest.rssi) {
+                // 如果是新的SSID或者信号更强，则更新
+                ssidMap[ap.ssid] = ap
+                if (currentBest != null) {
+                    Log.d(TAG, "合并信号: '${ap.ssid}' 选择了更强的信号 ${ap.rssi}dBm (原: ${currentBest.rssi}dBm)")
+                }
+            } else {
+                Log.d(TAG, "合并信号: '${ap.ssid}' 保留现有信号 ${currentBest.rssi}dBm (新: ${ap.rssi}dBm)")
+            }
+        }
+        
+        val result = ssidMap.values.toList()
+        Log.d(TAG, "信号合并完成: ${accessPoints.size} -> ${result.size} 个唯一SSID")
+        return result
     }
     
     /**

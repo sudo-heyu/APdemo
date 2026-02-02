@@ -23,17 +23,4 @@ data class AccessPoint(
             else -> 0         // 信号很差
         }
     }
-    
-    /**
-     * 获取信号强度描述文本
-     */
-    fun getSignalDescription(): String {
-        return when (getSignalLevel()) {
-            4 -> "信号很强"
-            3 -> "信号良好"
-            2 -> "信号一般"
-            1 -> "信号较弱"
-            else -> "信号很差"
-        }
-    }
 }

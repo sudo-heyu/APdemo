@@ -8,8 +8,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.View
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -20,7 +18,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.heyu.apdemo2.adapter.AccessPointAdapter
-import com.heyu.apdemo2.model.AccessPoint
 import com.heyu.apdemo2.scanner.WifiScanner
 
 class MainActivity : AppCompatActivity() {
@@ -64,27 +61,23 @@ class MainActivity : AppCompatActivity() {
                     1 -> {
                         // 第一步：立即扫描并显示结果
                         startImmediateScan()
-                        // 2秒后执行第二步
                         handler.postDelayed(this, scanStepInterval)
                     }
-                    2 -> {
-                        // 第二步：2秒后保持列表不变（不扫描）
-                        Log.d(TAG, "第2步：保持列表不变")
-                        showStatusMessage("发现 $currentAccessPointCount 个WiFi信号")
-                        // 再2秒后执行第三步
-                        handler.postDelayed(this, scanStepInterval)
-                    }
-                    3 -> {
-                        // 第三步：再次扫描并更新列表（保留公共项）
+                    2,3 -> {
+                        // 第二、三步：2秒后再次扫描
                         startImmediateScan()
-                        // 再2秒后执行第四步
                         handler.postDelayed(this, scanStepInterval)
                     }
                     4 -> {
                         // 第四步：再次扫描并更新列表（保留公共项）
                         startImmediateScan()
-                        // 2分钟后开始下一个完整周期
-                        handler.postDelayed(scanCycleRunnable, cycleInterval)
+                        // 2分钟后开始下一个完整周期，但不清空当前结果显示
+                        handler.postDelayed({
+                            if (!isFinishing) {
+                                Log.d(TAG, "=== 2分钟周期结束，开始新的扫描周期 ===")
+                                startScanCycle()
+                            }
+                        }, cycleInterval)
                     }
                 }
             }
@@ -224,12 +217,9 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "已在扫描中，跳过本次扫描")
             return
         }
-        
         isScanning = true
         Log.d(TAG, "开始即时WiFi扫描")
-        
         // 保持列表始终可见，不显示加载状态
-        
         try {
             wifiScanner.startScan(
                 onSuccess = { accessPoints ->
@@ -237,11 +227,9 @@ class MainActivity : AppCompatActivity() {
                         isScanning = false
                         // 保持列表始终可见
                         hasInitialScanCompleted = true
-                        
                         currentAccessPointCount = accessPoints.size
                         adapter.updateData(accessPoints)
                         recyclerView.adapter?.notifyDataSetChanged()
-                        
                         if (accessPoints.isEmpty()) {
                             showStatusMessage("发现 0 个WiFi信号")
                             Log.w(TAG, "扫描完成但未发现任何信号")
@@ -249,7 +237,6 @@ class MainActivity : AppCompatActivity() {
                             showStatusMessage("发现 ${accessPoints.size} 个WiFi信号")
                             Log.d(TAG, "扫描完成，找到 ${accessPoints.size} 个热点")
                         }
-                        
                         Log.d(TAG, "列表已更新，显示${recyclerView.adapter?.itemCount ?: 0}个项目")
                     }
                 },
@@ -280,14 +267,8 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "扫描过程中发生异常", e)
             isScanning = false
             // 保持列表始终可见
-            showStatusMessage("发现 0 个WiFi信号")
+            showStatusMessage("扫描发生异常")
         }
-    }
-    
-    private fun updateDisplay() {
-        Log.d(TAG, "保持显示内容不变")
-        // 第2步：保持当前显示状态
-        showStatusMessage("发现 $currentAccessPointCount 个WiFi信号")
     }
     
     private fun stopScanCycle() {
