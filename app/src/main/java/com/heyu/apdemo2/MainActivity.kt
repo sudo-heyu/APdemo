@@ -7,278 +7,270 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.heyu.apdemo2.adapter.AccessPointAdapter
+import com.heyu.apdemo2.model.AccessPoint
+import com.heyu.apdemo2.model.ApDetailResponse
+import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.scanner.WifiScanner
+import com.google.android.material.appbar.MaterialToolbar
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
-    
+
     private lateinit var wifiScanner: WifiScanner
     private lateinit var wifiManager: WifiManager
     private lateinit var adapter: AccessPointAdapter
     private lateinit var tvStatus: TextView
     private lateinit var recyclerView: RecyclerView
-    
-    // 定时刷新相关
+
+    private val apiService = ApiService()
+
     private val handler = Handler(Looper.getMainLooper())
-    private val cycleInterval: Long = 120000 // 2分钟循环间隔
-    private val scanStepInterval: Long = 2000 // 2秒扫描步长间隔
+    private val cycleInterval: Long = 120000 // 2分钟
     private var isScanning = false
-    private var hasInitialScanCompleted = false
-    private var currentAccessPointCount = 0 // 保存当前热点数量
-    private var scanCycleCount = 0 // 当前扫描周期内的步骤计数
-    
+    private var scanCycleCount = 0
+
     companion object {
-        private const val TAG = "MainActivity"
+        private const val TAG = "[SCAN_DEBUG]"
+        private const val PREFS_NAME = "server_settings"
+        private const val KEY_IP = "server_ip"
+        private const val KEY_PORT = "server_port"
     }
-    
-    private val scanCycleRunnable = object : Runnable {
-        override fun run() {
-            if (!isFinishing) {
-                Log.d(TAG, "=== 开始新的扫描周期 ===")
-                scanCycleCount = 0
-                startScanCycle()
-            }
-        }
+
+    // 辅助函数：简单的气泡提示
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
-    
-    private val scanStepRunnable = object : Runnable {
-        override fun run() {
-            if (!isFinishing && scanCycleCount < 4) {
-                scanCycleCount++
-                Log.d(TAG, "执行扫描步骤 $scanCycleCount")
-                
-                when (scanCycleCount) {
-                    1 -> {
-                        // 第一步：立即扫描并显示结果
-                        startImmediateScan()
-                        handler.postDelayed(this, scanStepInterval)
-                    }
-                    2,3 -> {
-                        // 第二、三步：2秒后再次扫描
-                        startImmediateScan()
-                        handler.postDelayed(this, scanStepInterval)
-                    }
-                    4 -> {
-                        // 第四步：再次扫描并更新列表（保留公共项）
-                        startImmediateScan()
-                        // 2分钟后开始下一个完整周期，但不清空当前结果显示
-                        handler.postDelayed({
-                            if (!isFinishing) {
-                                Log.d(TAG, "=== 2分钟周期结束，开始新的扫描周期 ===")
-                                startScanCycle()
-                            }
-                        }, cycleInterval)
-                    }
-                }
-            }
-        }
+
+    private fun showStatusMessage(message: String) {
+        tvStatus.text = "状态: $message"
+        Log.d(TAG, "状态更新: $message")
     }
-    
-    // 权限请求启动器
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            Log.d(TAG, "权限获取成功，开始扫描")
-            startScanCycle()
-        } else {
-            val errorMsg = "需要WiFi和位置权限才能扫描"
-            showStatusMessage(errorMsg)
-            Log.e(TAG, errorMsg)
-            Toast.makeText(this, "请授予WiFi和位置权限", Toast.LENGTH_LONG).show()
-        }
-    }
-    
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.d(TAG, "=== onCreate called ===")
-        
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
-        
+
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
-        
-        try {
-            initViews()
-            initWifiScanner()
-            setupRecyclerView()
-            
-            // 应用启动时自动开始扫描
+
+        initViews()
+        initWifiScanner()
+        setupRecyclerView()
+
+        val (ip, port) = getServerAddress()
+        if (ip == null || port == -1) {
+            showServerInputDialog()
+        } else {
             checkAndRequestPermissions()
-        } catch (e: Exception) {
-            Log.e(TAG, "初始化过程中发生错误", e)
-            showStatusMessage("应用初始化失败: ${e.message}")
         }
     }
-    
-    override fun onResume() {
-        super.onResume()
-        Log.d(TAG, "onResume called")
-        // 恢复状态显示
-        if (hasInitialScanCompleted && !isScanning) {
-            showStatusMessage("发现 ${currentAccessPointCount} 个WiFi信号")
-        }
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "onDestroy called")
-        stopScanCycle()
-    }
-    
+
     private fun initViews() {
-        Log.d(TAG, "初始化视图")
+        val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
+        setSupportActionBar(toolbar)
         tvStatus = findViewById(R.id.tv_status)
         recyclerView = findViewById(R.id.recycler_view)
-        
-        showStatusMessage("正在搜索WiFi信号...")
+        showStatusMessage("系统启动中...")
     }
-    
+
     private fun initWifiScanner() {
-        Log.d(TAG, "初始化WiFi扫描器")
         wifiScanner = WifiScanner(this)
         wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     }
-    
+
     private fun setupRecyclerView() {
-        Log.d(TAG, "设置RecyclerView")
         adapter = AccessPointAdapter { accessPoint ->
-            Toast.makeText(this, "点击了: ${accessPoint.ssid}", Toast.LENGTH_SHORT).show()
+            fetchSingleApDetail(accessPoint)
         }
         recyclerView.adapter = adapter
-        recyclerView.addItemDecoration(AccessPointAdapter.ItemDecoration())
     }
-    
-    private fun checkAndRequestPermissions() {
-        Log.d(TAG, "=== 开始权限检查 ===")
-        val permissions = arrayOf(
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        )
-        
-        val permissionsToRequest = permissions.filter { 
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED 
-        }
-        
-        if (permissionsToRequest.isEmpty()) {
-            Log.d(TAG, "已有所有权限，检查WiFi状态")
-            checkWifiAndStartScan()
-        } else {
-            Log.d(TAG, "需要请求权限: ${permissionsToRequest.joinToString()}")
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
-        }
-        Log.d(TAG, "=== 权限检查完成 ===")
-    }
-    
-    private fun checkWifiAndStartScan() {
-        Log.d(TAG, "检查WiFi状态")
-        val isWifiEnabled = wifiManager.isWifiEnabled
-        Log.d(TAG, "WiFi启用状态: $isWifiEnabled")
-        
-        if (!isWifiEnabled) {
-            showStatusMessage("请开启WiFi功能")
-            Toast.makeText(this, "请在系统设置中开启WiFi", Toast.LENGTH_LONG).show()
-        }
-        
-        // 立即开始第一个扫描周期
-        startScanCycle()
-    }
-    
+
+    // 1. 启动大周期
     private fun startScanCycle() {
-        Log.d(TAG, "开始扫描周期")
         scanCycleCount = 0
-        // 清空列表和累积结果，开始新的扫描周期
         wifiScanner.clearAccumulatedResults()
-        adapter.updateData(emptyList())
-        recyclerView.adapter?.notifyDataSetChanged()
-        currentAccessPointCount = 0
-        showStatusMessage("正在搜索WiFi信号...")
-        handler.post(scanStepRunnable)
+        toast("🚀 开始新一轮扫描周期 (共4次)")
+        runNextScanStep()
     }
-    
-    private fun startImmediateScan() {
-        if (isScanning) {
-            Log.d(TAG, "已在扫描中，跳过本次扫描")
-            return
-        }
+
+    // 2. 自动运行下一步
+    private fun runNextScanStep() {
+        if (isFinishing) return
+
+        scanCycleCount++
+        showStatusMessage("正在扫描 ($scanCycleCount/4)...")
+        Log.d(TAG, ">>> [第 $scanCycleCount 次扫描] 开始...")
+
         isScanning = true
-        Log.d(TAG, "开始即时WiFi扫描")
-        // 保持列表始终可见，不显示加载状态
-        try {
-            wifiScanner.startScan(
-                onSuccess = { accessPoints ->
-                    runOnUiThread {
-                        isScanning = false
-                        // 保持列表始终可见
-                        hasInitialScanCompleted = true
-                        currentAccessPointCount = accessPoints.size
-                        adapter.updateData(accessPoints)
-                        recyclerView.adapter?.notifyDataSetChanged()
-                        if (accessPoints.isEmpty()) {
-                            showStatusMessage("发现 0 个WiFi信号")
-                            Log.w(TAG, "扫描完成但未发现任何信号")
-                        } else {
-                            showStatusMessage("发现 ${accessPoints.size} 个WiFi信号")
-                            Log.d(TAG, "扫描完成，找到 ${accessPoints.size} 个热点")
-                        }
-                        Log.d(TAG, "列表已更新，显示${recyclerView.adapter?.itemCount ?: 0}个项目")
-                    }
-                },
-                onProgressive = { accessPoints, scanRound, newCount ->
-                    runOnUiThread {
-                        Log.d(TAG, "扫描进度更新 - 轮次: $scanRound, 总数: ${accessPoints.size}, 新增: $newCount")
-                        
-                        // 实时更新列表显示
-                        adapter.updateData(accessPoints)
-                        recyclerView.adapter?.notifyDataSetChanged()
-                        currentAccessPointCount = accessPoints.size
-                        
-                        showStatusMessage("发现 ${accessPoints.size} 个WiFi信号")
-                    }
-                },
-                onError = { errorMessage ->
-                    runOnUiThread {
-                        isScanning = false
-                        // 保持列表始终可见
-                        hasInitialScanCompleted = true
-                        
-                        showStatusMessage("发现 0 个WiFi信号")
-                        Log.e(TAG, "扫描错误: $errorMessage")
+        wifiScanner.startScan(
+            onSuccess = { accessPoints ->
+                runOnUiThread {
+                    isScanning = false
+                    adapter.updateData(accessPoints)
+                    Log.d(TAG, "<<< [第 $scanCycleCount 次扫描] 完成，当前热点数: ${accessPoints.size}")
+
+                    if (scanCycleCount < 4) {
+                        // 1秒后自动进行下一次扫描
+                        handler.postDelayed({ runNextScanStep() }, 1000)
+                    } else {
+                        // 4次扫描全部结束，立即上传
+                        toast("✅ 4次扫描结束，准备上传数据")
+                        uploadResultsToServer(accessPoints)
                     }
                 }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "扫描过程中发生异常", e)
-            isScanning = false
-            // 保持列表始终可见
-            showStatusMessage("扫描发生异常")
+            },
+            onProgressive = { accessPoints, _, _ ->
+                runOnUiThread { adapter.updateData(accessPoints) }
+            },
+            onError = { err ->
+                runOnUiThread {
+                    isScanning = false
+                    Log.e(TAG, "!!! 扫描出错: $err")
+                    toast("❌ 扫描出错: $err")
+                    if (scanCycleCount < 4) runNextScanStep() else startWaitingPhase()
+                }
+            }
+        )
+    }
+
+    // 3. 自动执行 HTTP 上传
+    private fun uploadResultsToServer(accessPoints: List<AccessPoint>) {
+        val (ip, port) = getServerAddress()
+        if (ip == null || port == -1) {
+            toast("⚠️ 上传失败：服务器地址未配置")
+            startWaitingPhase()
+            return
+        }
+
+        showStatusMessage("正在上传数据到 $ip:$port...")
+        Log.d(TAG, ">>> [关键步骤] 发起批量上传请求，包含 ${accessPoints.size} 个热点")
+
+        apiService.uploadScanResults(ip, port, accessPoints, object : ApiService.BatchCallback {
+            override fun onSuccess(message: String) {
+                runOnUiThread {
+                    Log.d(TAG, "<<< 上传成功: $message")
+                    toast("📡 数据上传成功!")
+                    startWaitingPhase()
+                }
+            }
+
+            override fun onError(error: String) {
+                runOnUiThread {
+                    Log.e(TAG, "!!! 上传请求失败: $error")
+                    toast("⛔ 上传失败，请检查网络和服务器日志")
+                    startWaitingPhase()
+                }
+            }
+        })
+    }
+
+    private fun startWaitingPhase() {
+        showStatusMessage("等待 2 分钟后自动开启下一轮...")
+        Log.d(TAG, ">>> 进入休眠等待 (2分钟)")
+        handler.postDelayed({
+            if (!isFinishing) startScanCycle()
+        }, cycleInterval)
+    }
+
+    private fun fetchSingleApDetail(accessPoint: AccessPoint) {
+        val (ip, port) = getServerAddress()
+        if (ip != null && port != -1) {
+            apiService.fetchApDetails(ip, port, accessPoint.bssid, object : ApiService.Callback {
+                override fun onSuccess(response: ApDetailResponse) {
+                    runOnUiThread {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("AP详情")
+                            .setMessage("SSID: ${response.ssid}\nBSSID: ${response.bssid}\n制造商: ${response.manufacturer}")
+                            .setPositiveButton("确定", null).show()
+                    }
+                }
+                override fun onError(error: String) {
+                    runOnUiThread { toast("详情查询失败: $error") }
+                }
+            })
         }
     }
-    
-    private fun stopScanCycle() {
-        Log.d(TAG, "停止扫描周期")
-        handler.removeCallbacks(scanStepRunnable)
-        handler.removeCallbacks(scanCycleRunnable)
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
     }
-    
-    private fun showStatusMessage(message: String) {
-        Log.d(TAG, "状态消息: $message")
-        tvStatus.text = message
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_settings -> {
+                showServerInputDialog()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        if (permissions.values.all { it }) startScanCycle() else toast("需要定位权限才能扫描")
+    }
+
+    private fun checkAndRequestPermissions() {
+        val permissions = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_WIFI_STATE, Manifest.permission.CHANGE_WIFI_STATE)
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) startScanCycle() else permissionLauncher.launch(missing.toTypedArray())
+    }
+
+    private fun getServerAddress(): Pair<String?, Int> {
+        val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return Pair(sharedPref.getString(KEY_IP, null), sharedPref.getInt(KEY_PORT, -1))
+    }
+
+    private fun showServerInputDialog() {
+        val (currentIp, currentPort) = getServerAddress()
+        val builder = AlertDialog.Builder(this).setTitle("服务器配置")
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 40)
+        }
+        val ipInput = EditText(this).apply { hint = "服务器 IP 地址"; setText(currentIp) }
+        val portInput = EditText(this).apply { hint = "端口号"; inputType = InputType.TYPE_CLASS_NUMBER; if(currentPort != -1) setText(currentPort.toString()) }
+        container.addView(ipInput); container.addView(portInput)
+        builder.setView(container)
+        builder.setPositiveButton("保存") { _, _ ->
+            val ip = ipInput.text.toString().trim()
+            val p = portInput.text.toString().trim()
+            if (ip.isNotEmpty() && p.isNotEmpty()) {
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .putString(KEY_IP, ip).putInt(KEY_PORT, p.toInt()).apply()
+                toast("配置已保存")
+                startScanCycle()
+            }
+        }
+        builder.setNegativeButton("取消", null)
+        builder.show()
     }
 }

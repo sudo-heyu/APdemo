@@ -9,4 +9,12 @@
     <string name="no_results">未找到WiFi热点</string>
     <string name="initial_hint">正在搜索WiFi信号...</string>
     <string name="found_signals">发现 %d 个WiFi信号</string>
+    <string name="server_settings">服务器设置</string>
+    <string name="input_server_title">设置服务器地址和端口</string>
+    <string name="ip_hint">请输入IP地址</string>
+    <string name="port_hint">请输入端口号</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="error_empty_input">IP和端口不能为空</string>
+    <string name="save_success">保存成功</string>
 </resources>
