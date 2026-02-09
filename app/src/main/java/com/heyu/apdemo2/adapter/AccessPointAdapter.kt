@@ -1,8 +1,5 @@
 package com.heyu.apdemo2.adapter
 
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,19 +9,17 @@ import androidx.recyclerview.widget.RecyclerView
 import com.heyu.apdemo2.R
 import com.heyu.apdemo2.model.AccessPoint
 
-/**
- * AP列表适配器
- * 用于在RecyclerView中展示WiFi热点信息（仅SSID和RSSI）
- */
 class AccessPointAdapter(
-    private var accessPoints: List<AccessPoint> = emptyList(),
-    private val onItemClick: (AccessPoint) -> Unit
+    private var accessPoints: List<AccessPoint> = emptyList()
 ) : RecyclerView.Adapter<AccessPointAdapter.ViewHolder>() {
     
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val ssidText: TextView = view.findViewById(R.id.tv_ssid)
         val signalIcon: ImageView = view.findViewById(R.id.iv_signal)
         val rssiText: TextView = view.findViewById(R.id.tv_rssi)
+        val scoreText: TextView = view.findViewById(R.id.tv_score)
+        val expandIcon: ImageView = view.findViewById(R.id.iv_expand)
+        val reasonText: TextView = view.findViewById(R.id.tv_reason)
     }
     
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -36,90 +31,58 @@ class AccessPointAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val ap = accessPoints[position]
         
-        // 设置SSID
         holder.ssidText.text = ap.ssid
-        
-        // 设置信号图标
+        holder.rssiText.text = "${ap.rssi} dBm"
         setSignalIcon(holder.signalIcon, ap.getSignalLevel())
         
-        // 设置RSSI显示
-        holder.rssiText.text = "${ap.rssi} dBm"
+        // 设置分数，字体颜色已在布局文件中设为 pale_blue
+        holder.scoreText.text = ap.score?.toString() ?: "--"
         
-        // 设置点击事件
-        holder.itemView.setOnClickListener {
-            onItemClick(ap)
+        // 设置理由和展开逻辑
+        if (ap.reason.isNullOrEmpty()) {
+            holder.expandIcon.visibility = View.GONE
+            holder.reasonText.visibility = View.GONE
+        } else {
+            holder.expandIcon.visibility = View.VISIBLE
+            holder.reasonText.text = ap.reason
+            
+            if (ap.isExpanded) {
+                holder.reasonText.visibility = View.VISIBLE
+                holder.expandIcon.setImageResource(R.drawable.ic_expand_less)
+            } else {
+                holder.reasonText.visibility = View.GONE
+                holder.expandIcon.setImageResource(R.drawable.ic_expand_more)
+            }
+            
+            holder.expandIcon.setOnClickListener {
+                ap.isExpanded = !ap.isExpanded
+                notifyItemChanged(position)
+            }
         }
+        
+        // 移除整个 itemView 的点击监听，不再支持单击 AP 查询详情
+        holder.itemView.setOnClickListener(null)
     }
     
     override fun getItemCount(): Int = accessPoints.size
     
     /**
-     * 更新数据
+     * 更新数据：优先显示有评分的，然后按信号强度排序
      */
     fun updateData(newData: List<AccessPoint>) {
-        // 按信号强度排序（降序）
-        val sortedData = newData.sortedByDescending { it.rssi }
-        accessPoints = sortedData
+        accessPoints = newData.sortedWith(compareByDescending<AccessPoint> { it.score != null }
+            .thenByDescending { it.rssi })
         notifyDataSetChanged()
     }
     
-    /**
-     * 设置信号强度图标
-     */
     private fun setSignalIcon(imageView: ImageView, level: Int) {
         val iconRes = when (level) {
-            4 -> R.drawable.ic_signal_4  // 信号很强
-            3 -> R.drawable.ic_signal_3  // 信号良好
-            2 -> R.drawable.ic_signal_2  // 信号一般
-            1 -> R.drawable.ic_signal_1  // 信号较弱
-            else -> R.drawable.ic_signal_0 // 信号很差
+            4 -> R.drawable.ic_signal_4
+            3 -> R.drawable.ic_signal_3
+            2 -> R.drawable.ic_signal_2
+            1 -> R.drawable.ic_signal_1
+            else -> R.drawable.ic_signal_0
         }
         imageView.setImageResource(iconRes)
-    }
-    
-    /**
-     * RecyclerView项目间距装饰器（带分割线）
-     */
-    class ItemDecoration : RecyclerView.ItemDecoration() {
-        private val dividerPaint = Paint().apply {
-            color = 0xFFDDDDDD.toInt() // 淡灰色
-            strokeWidth = 1f
-        }
-        
-        override fun getItemOffsets(
-            outRect: Rect,
-            view: View,
-            parent: RecyclerView,
-            state: RecyclerView.State
-        ) {
-            val position = parent.getChildAdapterPosition(view)
-            
-            // 设置左右边距
-            outRect.left = 16
-            outRect.right = 16
-            
-            // 第一个项目顶部间距
-            if (position == 0) {
-                outRect.top = 8
-            }
-            
-            // 所有项目底部间距（为分割线预留空间）
-            outRect.bottom = 1
-        }
-        
-        override fun onDraw(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
-            val left = parent.paddingLeft + 16
-            val right = parent.width - parent.paddingRight - 16
-            
-            for (i in 0 until parent.childCount) {
-                val child = parent.getChildAt(i)
-                val params = child.layoutParams as RecyclerView.LayoutParams
-                
-                val top = child.bottom + params.bottomMargin
-                val bottom = top + 1
-                
-                c.drawLine(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), dividerPaint)
-            }
-        }
     }
 }

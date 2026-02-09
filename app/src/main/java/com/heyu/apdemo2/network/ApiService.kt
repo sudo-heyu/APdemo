@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.heyu.apdemo2.model.AccessPoint
 import com.heyu.apdemo2.model.ApDetailResponse
+import com.heyu.apdemo2.model.ScanResponse
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -24,7 +25,7 @@ class ApiService {
     }
 
     interface BatchCallback {
-        fun onSuccess(message: String)
+        fun onSuccess(response: ScanResponse)
         fun onError(error: String)
     }
 
@@ -66,12 +67,11 @@ class ApiService {
     }
 
     /**
-     * 批量上传 4 次扫描后的结果 (已简化 Payload)
+     * 批量上传 4 次扫描后的结果并接收评分
      */
     fun uploadScanResults(ip: String, port: Int, accessPoints: List<AccessPoint>, callback: BatchCallback) {
         val url = "http://$ip:$port/api/upload_scan"
         
-        // 简化数据：仅提取 SSID 字符串列表，去掉 bssid, rssi, frequency, timestamp
         val ssidList = accessPoints.map { it.ssid }.filter { it.isNotBlank() }
         
         val payload = mapOf(
@@ -84,18 +84,16 @@ class ApiService {
         val body = jsonRequest.toRequestBody(JSON)
         
         Log.d(DEBUG_TAG, "========================================")
-        Log.d(DEBUG_TAG, ">>> [HTTP POST] 发起简化版批量上传")
+        Log.d(DEBUG_TAG, ">>> [HTTP POST] 发起批量上传并请求评分")
         Log.d(DEBUG_TAG, "目标地址: $url")
         Log.d(DEBUG_TAG, "SSID 数量: ${ssidList.size}")
-        Log.d(DEBUG_TAG, "完整载荷: $jsonRequest")
         Log.d(DEBUG_TAG, "========================================")
         
         val request = Request.Builder().url(url).post(body).build()
 
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e(DEBUG_TAG, "!!! [上传失败]: 网络错误或策略限制")
-                Log.e(DEBUG_TAG, "错误详情: ${e.message}")
+                Log.e(DEBUG_TAG, "!!! [上传失败]: ${e.message}")
                 callback.onError(e.message ?: "Unknown Error")
             }
 
@@ -105,8 +103,14 @@ class ApiService {
                     Log.d(DEBUG_TAG, "<<< [上传响应] 状态码: ${it.code}")
                     Log.d(DEBUG_TAG, "服务器回应: $respStr")
                     
-                    if (it.isSuccessful) {
-                        callback.onSuccess(respStr ?: "OK")
+                    if (it.isSuccessful && respStr != null) {
+                        try {
+                            val scanResponse = gson.fromJson(respStr, ScanResponse::class.java)
+                            callback.onSuccess(scanResponse)
+                        } catch (e: Exception) {
+                            Log.e(DEBUG_TAG, "JSON解析失败: ${e.message}")
+                            callback.onError("数据格式解析失败")
+                        }
                     } else {
                         callback.onError("服务器错误: ${it.code}")
                     }

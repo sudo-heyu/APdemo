@@ -25,13 +25,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.heyu.apdemo2.adapter.AccessPointAdapter
 import com.heyu.apdemo2.model.AccessPoint
-import com.heyu.apdemo2.model.ApDetailResponse
+import com.heyu.apdemo2.model.ScanResponse
 import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.scanner.WifiScanner
 import com.google.android.material.appbar.MaterialToolbar
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,9 +41,23 @@ class MainActivity : AppCompatActivity() {
     private val apiService = ApiService()
 
     private val handler = Handler(Looper.getMainLooper())
-    private val cycleInterval: Long = 120000 // 2分钟
+    
+    // --- 周期设置 ---
+    private val cycleInterval: Long = 150000 // 150秒 (总周期)
+    private val pollInterval: Long = 10000  // 10秒 (监控查询间隔)
+    
     private var isScanning = false
     private var scanCycleCount = 0
+    private var currentAccessPoints: List<AccessPoint> = emptyList()
+
+    // 轮询 Runnable：用于在等待期间每10秒查询一次服务器分数
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            queryScoresOnly()
+            handler.postDelayed(this, pollInterval)
+        }
+    }
 
     companion object {
         private const val TAG = "[SCAN_DEBUG]"
@@ -55,7 +66,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PORT = "server_port"
     }
 
-    // 辅助函数：简单的气泡提示
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
@@ -102,21 +112,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupRecyclerView() {
-        adapter = AccessPointAdapter { accessPoint ->
-            fetchSingleApDetail(accessPoint)
-        }
+        adapter = AccessPointAdapter()
         recyclerView.adapter = adapter
     }
 
-    // 1. 启动大周期
     private fun startScanCycle() {
+        // 开启新一轮扫描前，务必先停止轮询任务
+        handler.removeCallbacks(pollRunnable)
+        
         scanCycleCount = 0
         wifiScanner.clearAccumulatedResults()
-        toast("🚀 开始新一轮扫描周期 (共4次)")
+        toast("🚀 开始新一轮扫描 (共4次)")
         runNextScanStep()
     }
 
-    // 2. 自动运行下一步
     private fun runNextScanStep() {
         if (isFinishing) return
 
@@ -129,89 +138,113 @@ class MainActivity : AppCompatActivity() {
             onSuccess = { accessPoints ->
                 runOnUiThread {
                     isScanning = false
+                    currentAccessPoints = accessPoints
                     adapter.updateData(accessPoints)
-                    Log.d(TAG, "<<< [第 $scanCycleCount 次扫描] 完成，当前热点数: ${accessPoints.size}")
+                    Log.d(TAG, "<<< [第 $scanCycleCount 次扫描] 完成")
 
                     if (scanCycleCount < 4) {
-                        // 1秒后自动进行下一次扫描
-                        handler.postDelayed({ runNextScanStep() }, 1000)
+                        handler.postDelayed({ runNextScanStep() }, 2000)
                     } else {
-                        // 4次扫描全部结束，立即上传
-                        toast("✅ 4次扫描结束，准备上传数据")
+                        toast("✅ 4次扫描结束，上传数据并开启监控")
                         uploadResultsToServer(accessPoints)
                     }
                 }
             },
             onProgressive = { accessPoints, _, _ ->
-                runOnUiThread { adapter.updateData(accessPoints) }
+                runOnUiThread { 
+                    currentAccessPoints = accessPoints
+                    adapter.updateData(accessPoints) 
+                }
             },
             onError = { err ->
                 runOnUiThread {
                     isScanning = false
                     Log.e(TAG, "!!! 扫描出错: $err")
                     toast("❌ 扫描出错: $err")
-                    if (scanCycleCount < 4) runNextScanStep() else startWaitingPhase()
+                    if (scanCycleCount < 4) {
+                        handler.postDelayed({ runNextScanStep() }, 2000)
+                    } else {
+                        startWaitingPhase()
+                    }
                 }
             }
         )
     }
 
-    // 3. 自动执行 HTTP 上传
     private fun uploadResultsToServer(accessPoints: List<AccessPoint>) {
         val (ip, port) = getServerAddress()
         if (ip == null || port == -1) {
-            toast("⚠️ 上传失败：服务器地址未配置")
             startWaitingPhase()
             return
         }
 
-        showStatusMessage("正在上传数据到 $ip:$port...")
-        Log.d(TAG, ">>> [关键步骤] 发起批量上传请求，包含 ${accessPoints.size} 个热点")
-
+        showStatusMessage("同步初始评分...")
         apiService.uploadScanResults(ip, port, accessPoints, object : ApiService.BatchCallback {
-            override fun onSuccess(message: String) {
+            override fun onSuccess(response: ScanResponse) {
                 runOnUiThread {
-                    Log.d(TAG, "<<< 上传成功: $message")
-                    toast("📡 数据上传成功!")
+                    updateScoresFromResponse(response)
+                    toast("📡 初始评分同步成功!")
                     startWaitingPhase()
                 }
             }
-
             override fun onError(error: String) {
                 runOnUiThread {
                     Log.e(TAG, "!!! 上传请求失败: $error")
-                    toast("⛔ 上传失败，请检查网络和服务器日志")
+                    toast("⛔ 评分获取失败: $error")
                     startWaitingPhase()
                 }
             }
         })
     }
 
-    private fun startWaitingPhase() {
-        showStatusMessage("等待 2 分钟后自动开启下一轮...")
-        Log.d(TAG, ">>> 进入休眠等待 (2分钟)")
-        handler.postDelayed({
-            if (!isFinishing) startScanCycle()
-        }, cycleInterval)
+    /**
+     * 监控阶段调用的纯查询函数（每10秒一次）
+     */
+    private fun queryScoresOnly() {
+        val (ip, port) = getServerAddress()
+        if (ip == null || port == -1 || currentAccessPoints.isEmpty()) return
+
+        Log.d(TAG, ">>> [轮询监控] 正在获取最新评分...")
+        apiService.uploadScanResults(ip, port, currentAccessPoints, object : ApiService.BatchCallback {
+            override fun onSuccess(response: ScanResponse) {
+                runOnUiThread {
+                    updateScoresFromResponse(response)
+                    Log.d(TAG, "<<< [轮询监控] 评分已更新")
+                }
+            }
+            override fun onError(error: String) {
+                Log.e(TAG, "!!! [轮询监控] 失败: $error")
+            }
+        })
     }
 
-    private fun fetchSingleApDetail(accessPoint: AccessPoint) {
-        val (ip, port) = getServerAddress()
-        if (ip != null && port != -1) {
-            apiService.fetchApDetails(ip, port, accessPoint.bssid, object : ApiService.Callback {
-                override fun onSuccess(response: ApDetailResponse) {
-                    runOnUiThread {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("AP详情")
-                            .setMessage("SSID: ${response.ssid}\nBSSID: ${response.bssid}\n制造商: ${response.manufacturer}")
-                            .setPositiveButton("确定", null).show()
-                    }
-                }
-                override fun onError(error: String) {
-                    runOnUiThread { toast("详情查询失败: $error") }
-                }
-            })
+    /**
+     * 更新列表中的评分数据
+     */
+    private fun updateScoresFromResponse(response: ScanResponse) {
+        response.results?.forEach { result ->
+            currentAccessPoints.find { it.ssid == result.ssid }?.let { ap ->
+                ap.score = result.score
+                ap.reason = result.reason
+            }
         }
+        adapter.updateData(currentAccessPoints)
+    }
+
+    private fun startWaitingPhase() {
+        showStatusMessage("监控中: 每10s刷新评分 (总计150s)...")
+        Log.d(TAG, ">>> 进入150s等待期，开启10s轮询查询")
+
+        // 1. 10秒后开始第一次轮询
+        handler.postDelayed(pollRunnable, pollInterval)
+        
+        // 2. 150秒后开启下一轮大扫描
+        handler.postDelayed({
+            if (!isFinishing) {
+                handler.removeCallbacks(pollRunnable)
+                startScanCycle()
+            }
+        }, cycleInterval)
     }
 
     override fun onDestroy() {
@@ -230,8 +263,29 @@ class MainActivity : AppCompatActivity() {
                 showServerInputDialog()
                 true
             }
+            R.id.action_help -> {
+                showHelpDialog()
+                true
+            }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun showHelpDialog() {
+        val message = StringBuilder().apply {
+            append("💡 使用说明与常见问题：\n\n")
+            append("1. 扫描限制：Android 系统限制应用每 2 分钟最多进行 4 次硬件扫描。如果应用卡在扫描阶段或无数据，请尝试重启 APP。\n\n")
+            append("2. 无数据：若 4 次扫描后列表为空，请检查手机 Wi-Fi 是否开启、位置权限是否授予，以及周边是否存在有效热点。\n\n")
+            append("3. 服务器连接：若始终显示“评分获取失败”，请检查服务器 IP/端口配置是否正确，并确保手机与服务器处于同一网络环境。\n\n")
+            append("4. 动态评分：系统在扫描完成后，每 10 秒会同步一次服务器评分，您可以通过点击列表右侧图标查看详细评估理由。\n\n")
+            append("5. 周期运行：应用每 150 秒会自动触发新一轮的完整扫描，期间会自动更新评分。")
+        }.toString()
+
+        AlertDialog.Builder(this)
+            .setTitle("答疑解惑")
+            .setMessage(message)
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
