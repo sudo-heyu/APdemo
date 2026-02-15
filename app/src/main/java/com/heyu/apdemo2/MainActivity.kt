@@ -39,23 +39,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
 
     private val apiService = ApiService()
-
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
     
-    // --- 周期设置 ---
-    private val cycleInterval: Long = 150000 // 150秒 (总周期)
-    private val pollInterval: Long = 10000  // 10秒 (监控查询间隔)
+    // 配置参数
+    private var cycleInterval: Long = 150000 
+    private var pollInterval: Long = 10000  
     
-    private var isScanning = false
     private var scanCycleCount = 0
     private var currentAccessPoints: List<AccessPoint> = emptyList()
+    
+    // 状态标记：用于确保回调不会在任务停止后执行
+    private var isTaskRunning = false
+    private var currentCycleId = 0L // 每个大循环唯一的 ID
 
-    // 轮询 Runnable：用于在等待期间每10秒查询一次服务器分数
     private val pollRunnable = object : Runnable {
         override fun run() {
-            if (isFinishing) return
+            if (!isTaskRunning || isFinishing) return
             queryScoresOnly()
-            handler.postDelayed(this, pollInterval)
+            mainHandler.postDelayed(this, pollInterval)
         }
     }
 
@@ -64,15 +65,8 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "server_settings"
         private const val KEY_IP = "server_ip"
         private const val KEY_PORT = "server_port"
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showStatusMessage(message: String) {
-        tvStatus.text = "状态: $message"
-        Log.d(TAG, "状态更新: $message")
+        private const val KEY_POLL_INTERVAL = "poll_interval"
+        private const val KEY_CYCLE_INTERVAL = "cycle_interval"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         initViews()
         initWifiScanner()
         setupRecyclerView()
+        loadSettings()
 
         val (ip, port) = getServerAddress()
         if (ip == null || port == -1) {
@@ -103,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         tvStatus = findViewById(R.id.tv_status)
         recyclerView = findViewById(R.id.recycler_view)
-        showStatusMessage("系统启动中...")
+        tvStatus.text = "状态: 准备就绪"
     }
 
     private fun initWifiScanner() {
@@ -116,111 +111,147 @@ class MainActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
     }
 
-    private fun startScanCycle() {
-        // 开启新一轮扫描前，务必先停止轮询任务
-        handler.removeCallbacks(pollRunnable)
-        
-        scanCycleCount = 0
-        wifiScanner.clearAccumulatedResults()
-        toast("🚀 开始新一轮扫描 (共4次)")
-        runNextScanStep()
+    private fun loadSettings() {
+        val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        pollInterval = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L)
+        cycleInterval = sharedPref.getLong(KEY_CYCLE_INTERVAL, 150000L)
+        Log.d(TAG, "配置加载: 轮询=$pollInterval, 周期=$cycleInterval")
     }
 
-    private fun runNextScanStep() {
-        if (isFinishing) return
+    /**
+     * 重置并开始一个全新大循环
+     */
+    private fun startScanCycle() {
+        Log.d(TAG, ">>> [startScanCycle] 重置流程")
+        
+        // 1. 标记任务状态并清理所有挂起的 Handler 任务
+        isTaskRunning = true
+        currentCycleId = System.currentTimeMillis()
+        mainHandler.removeCallbacksAndMessages(null)
+        
+        // 2. 停止正在进行的硬件扫描
+        wifiScanner.stopScan()
+        wifiScanner.clearAccumulatedResults()
+        
+        scanCycleCount = 0
+        Toast.makeText(this, "🚀 开始新一轮循环", Toast.LENGTH_SHORT).show()
+        runNextScanStep(currentCycleId)
+    }
+
+    private fun runNextScanStep(cycleId: Long) {
+        if (!isTaskRunning || isFinishing || cycleId != currentCycleId) {
+            Log.d(TAG, "runNextScanStep: 任务已停止或周期不匹配，跳过")
+            return
+        }
 
         scanCycleCount++
-        showStatusMessage("正在扫描 ($scanCycleCount/4)...")
-        Log.d(TAG, ">>> [第 $scanCycleCount 次扫描] 开始...")
+        val statusMsg = "正在扫描采样 ($scanCycleCount/4)..."
+        runOnUiThread { tvStatus.text = "状态: $statusMsg" }
+        Log.d(TAG, ">>> [Cycle $cycleId] 第 $scanCycleCount 次采样开始")
 
-        isScanning = true
         wifiScanner.startScan(
             onSuccess = { accessPoints ->
                 runOnUiThread {
-                    isScanning = false
+                    // 再次检查状态，防止异步回调时状态已变
+                    if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
+
                     currentAccessPoints = accessPoints
                     adapter.updateData(accessPoints)
-                    Log.d(TAG, "<<< [第 $scanCycleCount 次扫描] 完成")
+                    Log.d(TAG, "<<< [Cycle $cycleId] 采样 $scanCycleCount 完成")
 
                     if (scanCycleCount < 4) {
-                        handler.postDelayed({ runNextScanStep() }, 2000)
+                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 2000)
                     } else {
-                        toast("✅ 4次扫描结束，上传数据并开启监控")
-                        uploadResultsToServer(accessPoints)
+                        tvStatus.text = "状态: 采样完成，正在请求初始评分..."
+                        uploadResultsToServer(cycleId, accessPoints)
                     }
                 }
             },
             onProgressive = { accessPoints, _, _ ->
                 runOnUiThread { 
-                    currentAccessPoints = accessPoints
-                    adapter.updateData(accessPoints) 
+                    if (isTaskRunning && cycleId == currentCycleId) {
+                        currentAccessPoints = accessPoints
+                        adapter.updateData(accessPoints) 
+                    }
                 }
             },
             onError = { err ->
                 runOnUiThread {
-                    isScanning = false
-                    Log.e(TAG, "!!! 扫描出错: $err")
-                    toast("❌ 扫描出错: $err")
+                    if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
+                    Log.e(TAG, "!!! 采样失败: $err")
                     if (scanCycleCount < 4) {
-                        handler.postDelayed({ runNextScanStep() }, 2000)
+                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 2000)
                     } else {
-                        startWaitingPhase()
+                        startWaitingPhase(cycleId, "扫描阶段异常")
                     }
                 }
             }
         )
     }
 
-    private fun uploadResultsToServer(accessPoints: List<AccessPoint>) {
+    private fun uploadResultsToServer(cycleId: Long, accessPoints: List<AccessPoint>) {
+        if (!isTaskRunning || cycleId != currentCycleId) return
+        
         val (ip, port) = getServerAddress()
         if (ip == null || port == -1) {
-            startWaitingPhase()
+            startWaitingPhase(cycleId, "服务器未配置")
             return
         }
 
-        showStatusMessage("同步初始评分...")
         apiService.uploadScanResults(ip, port, accessPoints, object : ApiService.BatchCallback {
             override fun onSuccess(response: ScanResponse) {
                 runOnUiThread {
+                    if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
                     updateScoresFromResponse(response)
-                    toast("📡 初始评分同步成功!")
-                    startWaitingPhase()
+                    Toast.makeText(this@MainActivity, "📡 初始评分已同步", Toast.LENGTH_SHORT).show()
+                    startWaitingPhase(cycleId, "监控模式")
                 }
             }
             override fun onError(error: String) {
                 runOnUiThread {
-                    Log.e(TAG, "!!! 上传请求失败: $error")
-                    toast("⛔ 评分获取失败: $error")
-                    startWaitingPhase()
+                    if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
+                    Log.e(TAG, "!!! 初始同步失败: $error")
+                    startWaitingPhase(cycleId, "评分同步失败")
                 }
             }
         })
     }
 
-    /**
-     * 监控阶段调用的纯查询函数（每10秒一次）
-     */
+    private fun startWaitingPhase(cycleId: Long, status: String) {
+        if (!isTaskRunning || cycleId != currentCycleId) return
+
+        val displayMsg = "$status (下轮扫描在 ${cycleInterval/1000}s 后)"
+        runOnUiThread { tvStatus.text = "状态: $displayMsg" }
+        Log.d(TAG, ">>> [Cycle $cycleId] 进入等待期")
+
+        // 1. 开启监控轮询
+        mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.postDelayed(pollRunnable, pollInterval)
+        
+        // 2. 预定下一轮大循环
+        mainHandler.postDelayed({
+            if (isTaskRunning && !isFinishing && cycleId == currentCycleId) {
+                startScanCycle()
+            }
+        }, cycleInterval)
+    }
+
     private fun queryScoresOnly() {
         val (ip, port) = getServerAddress()
         if (ip == null || port == -1 || currentAccessPoints.isEmpty()) return
 
-        Log.d(TAG, ">>> [轮询监控] 正在获取最新评分...")
         apiService.uploadScanResults(ip, port, currentAccessPoints, object : ApiService.BatchCallback {
             override fun onSuccess(response: ScanResponse) {
-                runOnUiThread {
-                    updateScoresFromResponse(response)
-                    Log.d(TAG, "<<< [轮询监控] 评分已更新")
+                runOnUiThread { 
+                    if (isTaskRunning) updateScoresFromResponse(response) 
                 }
             }
             override fun onError(error: String) {
-                Log.e(TAG, "!!! [轮询监控] 失败: $error")
+                Log.e(TAG, "轮询评分失败: $error")
             }
         })
     }
 
-    /**
-     * 更新列表中的评分数据
-     */
     private fun updateScoresFromResponse(response: ScanResponse) {
         response.results?.forEach { result ->
             currentAccessPoints.find { it.ssid == result.ssid }?.let { ap ->
@@ -231,25 +262,11 @@ class MainActivity : AppCompatActivity() {
         adapter.updateData(currentAccessPoints)
     }
 
-    private fun startWaitingPhase() {
-        showStatusMessage("监控中: 每10s刷新评分 (总计150s)...")
-        Log.d(TAG, ">>> 进入150s等待期，开启10s轮询查询")
-
-        // 1. 10秒后开始第一次轮询
-        handler.postDelayed(pollRunnable, pollInterval)
-        
-        // 2. 150秒后开启下一轮大扫描
-        handler.postDelayed({
-            if (!isFinishing) {
-                handler.removeCallbacks(pollRunnable)
-                startScanCycle()
-            }
-        }, cycleInterval)
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacksAndMessages(null)
+        isTaskRunning = false
+        mainHandler.removeCallbacksAndMessages(null)
+        wifiScanner.stopScan()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -273,23 +290,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHelpDialog() {
         val message = StringBuilder().apply {
-            append("💡 使用说明与常见问题：\n\n")
-            append("1. 扫描限制：Android 系统限制应用每 2 分钟最多进行 4 次硬件扫描。如果应用卡在扫描阶段或无数据，请尝试重启 APP。\n\n")
-            append("2. 无数据：若 4 次扫描后列表为空，请检查手机 Wi-Fi 是否开启、位置权限是否授予，以及周边是否存在有效热点。\n\n")
-            append("3. 服务器连接：若始终显示“评分获取失败”，请检查服务器 IP/端口配置是否正确，并确保手机与服务器处于同一网络环境。\n\n")
-            append("4. 动态评分：系统在扫描完成后，每 10 秒会同步一次服务器评分，您可以通过点击列表右侧图标查看详细评估理由。\n\n")
-            append("5. 周期运行：应用每 150 秒会自动触发新一轮的完整扫描，期间会自动更新评分。")
+            append("💡 扫描机制说明：\n\n")
+            append("1. 系统限制：Android 限制应用每 2 分钟最多进行 4 次硬件扫描。当受限时，应用将使用缓存数据并模拟扫描过程。\n\n")
+            append("2. 自动循环：应用按照“总循环周期”运行，每轮采样 4 次后进入监控模式定时刷新。")
         }.toString()
-
-        AlertDialog.Builder(this)
-            .setTitle("答疑解惑")
-            .setMessage(message)
-            .setPositiveButton("知道了", null)
-            .show()
+        AlertDialog.Builder(this).setTitle("帮助").setMessage(message).setPositiveButton("知道了", null).show()
     }
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-        if (permissions.values.all { it }) startScanCycle() else toast("需要定位权限才能扫描")
+        if (permissions.values.all { it }) startScanCycle() else Toast.makeText(this, "未获得必要权限", Toast.LENGTH_SHORT).show()
     }
 
     private fun checkAndRequestPermissions() {
@@ -304,23 +313,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showServerInputDialog() {
-        val (currentIp, currentPort) = getServerAddress()
-        val builder = AlertDialog.Builder(this).setTitle("服务器配置")
+        val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val currentIp = sharedPref.getString(KEY_IP, "")
+        val currentPort = sharedPref.getInt(KEY_PORT, -1)
+        val currentPoll = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L) / 1000
+        val currentCycle = sharedPref.getLong(KEY_CYCLE_INTERVAL, 150000L) / 1000
+
+        val builder = AlertDialog.Builder(this).setTitle("参数配置")
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(50, 40, 50, 40)
         }
-        val ipInput = EditText(this).apply { hint = "服务器 IP 地址"; setText(currentIp) }
-        val portInput = EditText(this).apply { hint = "端口号"; inputType = InputType.TYPE_CLASS_NUMBER; if(currentPort != -1) setText(currentPort.toString()) }
-        container.addView(ipInput); container.addView(portInput)
+
+        val ipInput = EditText(this).apply { hint = "服务器 IP"; setText(currentIp) }
+        val portInput = EditText(this).apply { hint = "端口"; inputType = InputType.TYPE_CLASS_NUMBER; if(currentPort != -1) setText(currentPort.toString()) }
+        val pollInput = EditText(this).apply { hint = "评分轮询间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentPoll.toString()) }
+        val cycleInput = EditText(this).apply { hint = "总循环周期 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentCycle.toString()) }
+
+        container.addView(ipInput)
+        container.addView(portInput)
+        container.addView(TextView(this).apply { text = "\n监控刷新频率 (秒):" })
+        container.addView(pollInput)
+        container.addView(TextView(this).apply { text = "\n总循环周期 (秒):" })
+        container.addView(cycleInput)
+        
         builder.setView(container)
         builder.setPositiveButton("保存") { _, _ ->
             val ip = ipInput.text.toString().trim()
             val p = portInput.text.toString().trim()
+            val poll = pollInput.text.toString().trim().toLongOrNull() ?: 10L
+            val cycle = cycleInput.text.toString().trim().toLongOrNull() ?: 150L
+
             if (ip.isNotEmpty() && p.isNotEmpty()) {
-                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                    .putString(KEY_IP, ip).putInt(KEY_PORT, p.toInt()).apply()
-                toast("配置已保存")
+                sharedPref.edit()
+                    .putString(KEY_IP, ip)
+                    .putInt(KEY_PORT, p.toInt())
+                    .putLong(KEY_POLL_INTERVAL, poll * 1000)
+                    .putLong(KEY_CYCLE_INTERVAL, cycle * 1000)
+                    .apply()
+                
+                loadSettings()
                 startScanCycle()
             }
         }
