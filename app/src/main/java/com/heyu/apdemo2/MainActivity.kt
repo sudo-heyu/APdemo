@@ -115,7 +115,7 @@ class MainActivity : AppCompatActivity() {
         val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         pollInterval = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L)
         cycleInterval = sharedPref.getLong(KEY_CYCLE_INTERVAL, 150000L)
-        Log.d(TAG, "配置加载: 轮询=$pollInterval, 周期=$cycleInterval")
+        Log.d(TAG, "配置加载: Reason刷新=$pollInterval, WiFi扫描频率=$cycleInterval")
     }
 
     /**
@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
         wifiScanner.clearAccumulatedResults()
         
         scanCycleCount = 0
-        Toast.makeText(this, "🚀 开始新一轮循环", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "开始新一轮扫描", Toast.LENGTH_SHORT).show()
         runNextScanStep(currentCycleId)
     }
 
@@ -160,7 +160,7 @@ class MainActivity : AppCompatActivity() {
                     Log.d(TAG, "<<< [Cycle $cycleId] 采样 $scanCycleCount 完成")
 
                     if (scanCycleCount < 4) {
-                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 2000)
+                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 500)
                     } else {
                         tvStatus.text = "状态: 采样完成，正在请求初始评分..."
                         uploadResultsToServer(cycleId, accessPoints)
@@ -180,7 +180,7 @@ class MainActivity : AppCompatActivity() {
                     if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
                     Log.e(TAG, "!!! 采样失败: $err")
                     if (scanCycleCount < 4) {
-                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 2000)
+                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 500)
                     } else {
                         startWaitingPhase(cycleId, "扫描阶段异常")
                     }
@@ -292,7 +292,7 @@ class MainActivity : AppCompatActivity() {
         val message = StringBuilder().apply {
             append("💡 扫描机制说明：\n\n")
             append("1. 系统限制：Android 限制应用每 2 分钟最多进行 4 次硬件扫描。当受限时，应用将使用缓存数据并模拟扫描过程。\n\n")
-            append("2. 自动循环：应用按照“总循环周期”运行，每轮采样 4 次后进入监控模式定时刷新。")
+            append("2. 自动循环：应用按照“WiFi扫描频率”运行，每轮采样 4 次后进入监控模式定时刷新。")
         }.toString()
         AlertDialog.Builder(this).setTitle("帮助").setMessage(message).setPositiveButton("知道了", null).show()
     }
@@ -327,14 +327,14 @@ class MainActivity : AppCompatActivity() {
 
         val ipInput = EditText(this).apply { hint = "服务器 IP"; setText(currentIp) }
         val portInput = EditText(this).apply { hint = "端口"; inputType = InputType.TYPE_CLASS_NUMBER; if(currentPort != -1) setText(currentPort.toString()) }
-        val pollInput = EditText(this).apply { hint = "评分轮询间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentPoll.toString()) }
-        val cycleInput = EditText(this).apply { hint = "总循环周期 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentCycle.toString()) }
+        val pollInput = EditText(this).apply { hint = "Reason刷新 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentPoll.toString()) }
+        val cycleInput = EditText(this).apply { hint = "WiFi扫描频率 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER; setText(currentCycle.toString()) }
 
         container.addView(ipInput)
         container.addView(portInput)
-        container.addView(TextView(this).apply { text = "\n监控刷新频率 (秒):" })
+        container.addView(TextView(this).apply { text = "\nReason刷新 (秒):" })
         container.addView(pollInput)
-        container.addView(TextView(this).apply { text = "\n总循环周期 (秒):" })
+        container.addView(TextView(this).apply { text = "\nWiFi扫描频率 (秒):" })
         container.addView(cycleInput)
         
         builder.setView(container)

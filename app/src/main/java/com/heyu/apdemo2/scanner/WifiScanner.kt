@@ -31,7 +31,7 @@ class WifiScanner(private val context: Context) {
 
     companion object {
         private const val TAG = "WifiScanner"
-        private const val SCAN_TIMEOUT = 12000L 
+        private const val SCAN_TIMEOUT = 2000L 
     }
 
     /**
@@ -106,7 +106,7 @@ class WifiScanner(private val context: Context) {
                     }
                 }
                 pendingTask = throttledTask
-                handler.postDelayed(throttledTask, 1000)
+                handler.postDelayed(throttledTask, 500)
             } else {
                 // 启动成功，开启超时监控
                 handler.postDelayed(timeoutTask, SCAN_TIMEOUT)
