@@ -145,9 +145,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         scanCycleCount++
-        val statusMsg = "正在扫描采样 ($scanCycleCount/4)..."
+        val statusMsg = "正在扫描..."
         runOnUiThread { tvStatus.text = "状态: $statusMsg" }
-        Log.d(TAG, ">>> [Cycle $cycleId] 第 $scanCycleCount 次采样开始")
+        Log.d(TAG, ">>> [Cycle $cycleId] 开始扫描")
 
         wifiScanner.startScan(
             onSuccess = { accessPoints ->
@@ -157,14 +157,10 @@ class MainActivity : AppCompatActivity() {
 
                     currentAccessPoints = accessPoints
                     adapter.updateData(accessPoints)
-                    Log.d(TAG, "<<< [Cycle $cycleId] 采样 $scanCycleCount 完成")
+                    Log.d(TAG, "<<< [Cycle $cycleId] 扫描完成，正在请求初始评分...")
 
-                    if (scanCycleCount < 4) {
-                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 500)
-                    } else {
-                        tvStatus.text = "状态: 采样完成，正在请求初始评分..."
-                        uploadResultsToServer(cycleId, accessPoints)
-                    }
+                    tvStatus.text = "状态: 扫描完成，正在请求初始评分..."
+                    uploadResultsToServer(cycleId, accessPoints)
                 }
             },
             onProgressive = { accessPoints, _, _ ->
@@ -179,11 +175,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
                     Log.e(TAG, "!!! 采样失败: $err")
-                    if (scanCycleCount < 4) {
-                        mainHandler.postDelayed({ runNextScanStep(cycleId) }, 500)
-                    } else {
-                        startWaitingPhase(cycleId, "扫描阶段异常")
-                    }
+                    startWaitingPhase(cycleId, "扫描阶段异常")
                 }
             }
         )
@@ -203,7 +195,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (!isTaskRunning || cycleId != currentCycleId) return@runOnUiThread
                     updateScoresFromResponse(response)
-                    Toast.makeText(this@MainActivity, "📡 初始评分已同步", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "初始评分已同步", Toast.LENGTH_SHORT).show()
                     startWaitingPhase(cycleId, "监控模式")
                 }
             }
@@ -292,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         val message = StringBuilder().apply {
             append("💡 扫描机制说明：\n\n")
             append("1. 系统限制：Android 限制应用每 2 分钟最多进行 4 次硬件扫描。当受限时，应用将使用缓存数据并模拟扫描过程。\n\n")
-            append("2. 自动循环：应用按照“WiFi扫描频率”运行，每轮采样 4 次后进入监控模式定时刷新。")
+            append("2. 自动循环：应用按照“WiFi扫描频率”运行，每次扫描完成后立即请求评分，然后进入监控模式定时刷新。")
         }.toString()
         AlertDialog.Builder(this).setTitle("帮助").setMessage(message).setPositiveButton("知道了", null).show()
     }
