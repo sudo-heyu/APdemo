@@ -2,11 +2,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/action_help"
-        android:icon="@android:drawable/ic_menu_help"
-        android:title="使用说明"
-        app:showAsAction="always" />
-    <item
         android:id="@+id/action_settings"
         android:icon="@android:drawable/ic_menu_manage"
         android:title="服务器设置"

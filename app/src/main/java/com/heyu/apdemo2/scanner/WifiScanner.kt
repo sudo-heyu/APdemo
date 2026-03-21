@@ -137,7 +137,8 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
                             ssid = result.SSID,
                             bssid = result.BSSID,
                             rssi = result.level,
-                            frequency = result.frequency
+                            frequency = result.frequency,
+                            capabilities = result.capabilities ?: ""
                         )
                     )
                     newCount++

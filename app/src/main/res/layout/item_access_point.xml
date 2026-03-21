@@ -17,6 +17,17 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- 已连接指示图标（叠加在信号图标右下角，仅置顶AP可见） -->
+    <ImageView
+        android:id="@+id/iv_connected"
+        android:layout_width="12dp"
+        android:layout_height="12dp"
+        android:src="@drawable/ic_link"
+        android:tint="#4CAF50"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="@id/iv_signal"
+        app:layout_constraintBottom_toBottomOf="@id/iv_signal" />
+
     <!-- SSID名称 -->
     <TextView
         android:id="@+id/tv_ssid"

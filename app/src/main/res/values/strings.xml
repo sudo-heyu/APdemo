@@ -17,4 +17,6 @@
     <string name="cancel">取消</string>
     <string name="error_empty_input">IP和端口不能为空</string>
     <string name="save_success">保存成功</string>
+    <string name="accessibility_service_label">WiFi 一键切换</string>
+    <string name="accessibility_service_desc">自动在系统 WiFi 列表中点击目标网络，实现应用内一键切换 WiFi。</string>
 </resources>

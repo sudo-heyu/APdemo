@@ -6,4 +6,10 @@
     </style>
 
     <style name="Theme.APdemo2" parent="Base.Theme.APdemo2" />
+
+    <style name="BottomNavTextStyle">
+        <item name="android:textSize">10sp</item>
+        <item name="android:lineSpacingMultiplier">1.0</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
 </resources>
