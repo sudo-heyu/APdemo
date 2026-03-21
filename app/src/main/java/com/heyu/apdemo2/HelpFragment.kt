@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -27,7 +29,7 @@ class HelpFragment : Fragment() {
             showDetail("无法后台运行？", BACKGROUND_CONTENT)
         }
         view.findViewById<MaterialCardView>(R.id.card_auto_connect).setOnClickListener {
-            showDetail("无法自动连接？", AUTO_CONNECT_CONTENT)
+            showAutoConnectDetail()
         }
     }
 
@@ -47,6 +49,59 @@ class HelpFragment : Fragment() {
         AlertDialog.Builder(ctx)
             .setTitle(title)
             .setView(scrollView)
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    private fun showAutoConnectDetail() {
+        val ctx = requireContext()
+        val dp = resources.displayMetrics.density
+        val padH = (32 * dp).toInt()
+        val padV = (16 * dp).toInt()
+
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // 文字说明
+        root.addView(TextView(ctx).apply {
+            text = AUTO_CONNECT_CONTENT
+            textSize = 14f
+            setTextColor(0xFF444444.toInt())
+            setLineSpacing(0f, 1.5f)
+            setPadding(padH, padV, padH, padV)
+        })
+
+        // 4 张引导图
+        val guides = listOf(
+            Pair(R.drawable.guild_1, "引导一：点击「去开启」"),
+            Pair(R.drawable.guild_2, "引导二：找到「WiFi一键切换」"),
+            Pair(R.drawable.guild_3, "引导三：打开「WiFi一键切换」"),
+            Pair(R.drawable.guild_4, "引导四：点击「允许」")
+        )
+
+        for ((drawableId, caption) in guides) {
+            root.addView(TextView(ctx).apply {
+                text = caption
+                textSize = 13f
+                setTextColor(0xFF555555.toInt())
+                setPadding(padH, (8 * dp).toInt(), padH, (4 * dp).toInt())
+            })
+            root.addView(ImageView(ctx).apply {
+                setImageResource(drawableId)
+                adjustViewBounds = true
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { lp ->
+                    lp.setMargins(padH, 0, padH, padV)
+                }
+            })
+        }
+
+        AlertDialog.Builder(ctx)
+            .setTitle("无法自动连接？")
+            .setView(ScrollView(ctx).also { it.addView(root) })
             .setPositiveButton("知道了", null)
             .show()
     }
