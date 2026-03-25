@@ -8,6 +8,7 @@ import android.net.NetworkInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.LayoutInflater
@@ -40,7 +41,7 @@ class WifiFragment : Fragment() {
     private var connectingCapabilities: String = ""
     private var connectingTimeoutRunnable: Runnable? = null
 
-    // 方式二：系统弹窗连接
+    // 方式二：系统弹窗连接（用于未保存网络）
     private lateinit var method2Connector: Method2ActionWifiAddNetworks
 
     companion object {
@@ -78,7 +79,7 @@ class WifiFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 初始化方式二连接器
+        // 初始化方式二连接器（仅用于未保存网络）
         method2Connector = Method2ActionWifiAddNetworks(this,
             object : Method2ActionWifiAddNetworks.ConnectionCallback {
                 override fun onLog(message: String) {
@@ -104,7 +105,27 @@ class WifiFragment : Fragment() {
                     clearConnectingState()
                 }
                 override fun onSuccess(ssid: String) {
-                    // 通过广播处理，这里不做额外操作
+                    // 系统弹窗方式连接成功
+                    activity?.runOnUiThread {
+                        cancelConnectingTimeout()
+                        val pwd = connectingPassword
+                        if (!pwd.isNullOrEmpty()) PasswordStore.save(requireContext(), ssid, pwd)
+                        clearConnectingState()
+                        tvStatus.text = "状态: 已连接到 $ssid"
+                        syncConnectedSsid()
+                        Toast.makeText(requireContext(), "已连接到 $ssid", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                override fun onAlreadyExists(ssid: String, password: String, capabilities: String) {
+                    // 网络已存在：使用无障碍服务连接
+                    activity?.runOnUiThread {
+                        Log.d(TAG, "网络 $ssid 已保存，切换到无障碍服务连接")
+                        val isOpen = capabilities.isEmpty() ||
+                               (!capabilities.contains("WPA") &&
+                                !capabilities.contains("WEP") &&
+                                !capabilities.contains("SAE"))
+                        tryAccessibilityServiceConnect(ssid, isOpen, password)
+                    }
                 }
             })
     }
@@ -167,10 +188,6 @@ class WifiFragment : Fragment() {
         if (ssid == null) return
 
         if (isConnectEvent && ssid == connectingSsid) {
-            // 目标网络连接成功 - 通知方式二
-            if (::method2Connector.isInitialized) {
-                method2Connector.onConnectionSuccess(ssid)
-            }
             // 目标网络连接成功
             cancelConnectingTimeout()
             val pwd = connectingPassword
@@ -236,12 +253,14 @@ class WifiFragment : Fragment() {
         }
 
         if (!ap.isSecured()) {
+            // 开放网络：未保存用系统弹窗，已保存用无障碍服务
             initiateConnect(ap.ssid, ap.capabilities, isOpen = true, password = "")
             return
         }
 
         val saved = PasswordStore.get(requireContext(), ap.ssid)
         if (saved != null) {
+            // 有密码：先尝试系统弹窗（未保存情况），失败会自动走无障碍服务
             initiateConnect(ap.ssid, ap.capabilities, isOpen = false, password = saved)
         } else {
             showPasswordDialog(ap)
@@ -252,18 +271,87 @@ class WifiFragment : Fragment() {
         connectingSsid = ssid
         connectingPassword = password
         connectingCapabilities = capabilities
-        tvStatus.text = "状态: 正在发起连接..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+：使用方式二 - 系统弹窗
+            // Android 11+：优先尝试系统弹窗（适用于未保存网络）
+            // 如果网络已保存，系统会返回 ALREADY_EXISTS，此时会走无障碍服务
+            tvStatus.text = "状态: 正在发起连接..."
             val success = method2Connector.connect(ssid, password, capabilities)
             if (!success) {
-                // fallback 已触发，清理状态
-                clearConnectingState()
+                // 系统不支持，尝试无障碍服务
+                tryAccessibilityServiceConnect(ssid, isOpen, password)
             }
         } else {
-            // Android 9-10：使用方式一 - WifiConfiguration
-            connectLegacy(ssid, isOpen, password)
+            // Android 9-10：使用无障碍服务
+            tryAccessibilityServiceConnect(ssid, isOpen, password)
+        }
+    }
+
+    /**
+     * 使用无障碍服务连接（适用于已保存网络）
+     */
+    private fun tryAccessibilityServiceConnect(ssid: String, isOpen: Boolean, password: String) {
+        if (!isAccessibilityServiceEnabled()) {
+            showAccessibilityPrompt(ssid, isOpen, password)
+            return
+        }
+
+        tvStatus.text = "状态: 正在跳转 WiFi 设置..."
+        WifiAutoConnectService.pendingSsid = ssid
+        WifiAutoConnectService.pendingPassword = if (isOpen) null else password
+
+        // 启动 WiFi 设置页
+        startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+        scheduleConnectingTimeout(ssid)
+    }
+
+    /**
+     * 检查无障碍服务是否开启
+     */
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val serviceName = "${requireContext().packageName}/${WifiAutoConnectService::class.java.name}"
+        val enabled = Settings.Secure.getString(
+            requireContext().contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabled.split(':').any { it.equals(serviceName, ignoreCase = true) }
+    }
+
+    /**
+     * 提示开启无障碍服务
+     */
+    private fun showAccessibilityPrompt(ssid: String, isOpen: Boolean, password: String) {
+        AlertDialog.Builder(requireContext())
+            .setTitle("需要开启无障碍服务")
+            .setMessage("该 WiFi 已保存，需要开启「WiFi 一键切换」无障碍服务才能自动连接。")
+            .setPositiveButton("去开启") { _, _ ->
+                // 保存参数，开启后回来可以继续
+                WifiAutoConnectService.pendingSsid = ssid
+                WifiAutoConnectService.pendingPassword = if (isOpen) null else password
+                startActivity(buildAccessibilityServiceIntent())
+            }
+            .setNegativeButton("取消") { _, _ ->
+                clearConnectingState()
+                tvStatus.text = "状态: 已取消"
+            }
+            .show()
+    }
+
+    /**
+     * 构建直接跳转到「WiFi 一键切换」无障碍服务设置页的 Intent。
+     * 在原生 Android 上会直接定位到该服务；不支持时回退到无障碍总列表。
+     */
+    private fun buildAccessibilityServiceIntent(): Intent {
+        val componentName = "${requireContext().packageName}/${WifiAutoConnectService::class.java.name}"
+        return try {
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                val args = android.os.Bundle().apply {
+                    putString(":settings:fragment_args_key", componentName)
+                }
+                putExtra(":settings:show_fragment_args", args)
+            }
+        } catch (_: Exception) {
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
         }
     }
 
@@ -319,6 +407,9 @@ class WifiFragment : Fragment() {
         connectingSsid = null
         connectingPassword = null
         connectingCapabilities = ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            method2Connector.clearState()
+        }
     }
 
     // ── 密码输入弹窗 ──────────────────────────────────────────────────────────
