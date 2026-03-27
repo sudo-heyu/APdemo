@@ -50,6 +50,9 @@ class WifiFragment : Fragment() {
         requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     }
 
+    // 当前 specifier 连接是系统级（直连）还是本地（仅绑定进程）
+    private var isSystemWifiConnection: Boolean = false
+
     companion object {
         private const val TAG = "[WIFI_FRAGMENT]"
         const val FRAGMENT_TAG = "wifi"
@@ -136,10 +139,27 @@ class WifiFragment : Fragment() {
     // ── 系统 WiFi 状态同步 ────────────────────────────────────────────────────
 
     private fun syncConnectedSsid() {
-        val ssid = getSystemConnectedSsid()
-        adapter.setPinned(ssid)
-        if (ssid != null && connectingSsid == null) {
-            tvStatus.text = "状态: 已连接到 $ssid"
+        val systemSsid = getSystemConnectedSsid()
+
+        if (networkCallback != null) {
+            // Specifier 请求活跃期间：
+            // 若系统 WiFi 已连上目标 SSID（直连情况），立即确认成功并同步 UI
+            if (systemSsid != null && systemSsid == connectingSsid) {
+                val pwd = connectingPassword
+                clearConnectingState()
+                if (!pwd.isNullOrEmpty()) PasswordStore.save(requireContext(), systemSsid, pwd)
+                isSystemWifiConnection = true
+                tvStatus.text = "状态: 已连接 [系统] $systemSsid"
+                adapter.setPinned(systemSsid)
+            }
+            // 其他情况（local-only 时系统 WiFi 无关变化）不干扰 specifier 管理的 pin
+            return
+        }
+
+        // 无 Specifier 请求时：直接跟随系统 WiFi 状态
+        adapter.setPinned(systemSsid)
+        if (systemSsid != null && connectingSsid == null) {
+            tvStatus.text = "状态: 已连接 [系统] $systemSsid"
         }
     }
 
@@ -249,9 +269,18 @@ class WifiFragment : Fragment() {
                     connectivityManager.bindProcessToNetwork(network)
                     val pwd = connectingPassword
                     if (!pwd.isNullOrEmpty()) PasswordStore.save(requireContext(), ssid, pwd)
-                    connectingSsid = null
-                    connectingPassword = null
-                    tvStatus.text = "状态: 已连接到 $ssid（本地）"
+                    clearConnectingState()
+                    // 检查该 Network 对象本身是否有互联网：
+                    // NET_CAPABILITY_VALIDATED = 系统已验证此网络可访问互联网
+                    // 不能用 SSID 对比，因为 specifier 即使连相同 SSID 也可能拿到 local-only Network
+                    val caps = connectivityManager.getNetworkCapabilities(network)
+                    isSystemWifiConnection =
+                        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    tvStatus.text = if (isSystemWifiConnection)
+                        "状态: 已连接 [系统] $ssid"
+                    else
+                        "状态: 已连接 [本地] $ssid"
                     adapter.setPinned(ssid)
                     Toast.makeText(requireContext(), "已连接到 $ssid", Toast.LENGTH_SHORT).show()
                 }
@@ -261,6 +290,7 @@ class WifiFragment : Fragment() {
                 mainHandler.post {
                     cancelConnectingTimeout()
                     tvStatus.text = "状态: 连接失败或被用户取消"
+                    isSystemWifiConnection = false
                     clearConnectingState()
                 }
             }
@@ -268,7 +298,11 @@ class WifiFragment : Fragment() {
             override fun onLost(network: Network) {
                 mainHandler.post {
                     connectivityManager.bindProcessToNetwork(null)
-                    tvStatus.text = "状态: 连接已断开"
+                    tvStatus.text = if (isSystemWifiConnection)
+                        "状态: 已断开 [系统]"
+                    else
+                        "状态: 已断开 [本地]"
+                    isSystemWifiConnection = false
                     adapter.setPinned(null)
                 }
             }
@@ -290,9 +324,8 @@ class WifiFragment : Fragment() {
             try { connectivityManager.unregisterNetworkCallback(it) } catch (_: Exception) {}
         }
         networkCallback = null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            connectivityManager.bindProcessToNetwork(null)
-        }
+        isSystemWifiConnection = false
+        connectivityManager.bindProcessToNetwork(null)
     }
 
     // ── 连接状态管理 ──────────────────────────────────────────────────────────
@@ -300,11 +333,18 @@ class WifiFragment : Fragment() {
     private fun scheduleConnectingTimeout(targetSsid: String) {
         cancelConnectingTimeout()
         connectingTimeoutRunnable = Runnable {
-            if (connectingSsid == targetSsid) {
-                Log.w(TAG, "连接超时: $targetSsid")
+            if (connectingSsid != targetSsid) return@Runnable
+            Log.w(TAG, "连接超时: $targetSsid")
+            // 系统 WiFi 已连上目标（直连情况下 onAvailable 可能迟到），视为成功
+            if (getSystemConnectedSsid() == targetSsid) {
+                isSystemWifiConnection = true
+                tvStatus.text = "状态: 已连接 [系统] $targetSsid"
+                adapter.setPinned(targetSsid)
+            } else {
                 tvStatus.text = "状态: 连接超时，请重试"
-                clearConnectingState()
+                releaseNetworkRequest()
             }
+            clearConnectingState()
         }.also { mainHandler.postDelayed(it, CONNECT_TIMEOUT_MS) }
     }
 
