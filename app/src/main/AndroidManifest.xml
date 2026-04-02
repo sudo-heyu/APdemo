@@ -29,7 +29,7 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -38,12 +38,12 @@
         </activity>
 
         <service
-            android:name=".ScanForegroundService"
+            android:name=".service.ScanForegroundService"
             android:exported="false"
             android:foregroundServiceType="location" />
 
         <service
-            android:name=".WifiAutoConnectService"
+            android:name=".connection.WifiAutoConnectService"
             android:exported="true"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

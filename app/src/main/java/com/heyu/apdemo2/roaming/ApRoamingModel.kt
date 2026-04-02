@@ -1,0 +1,189 @@
+package com.heyu.apdemo2.roaming
+
+import android.content.Context
+import android.util.Log
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.FloatBuffer
+import java.util.Locale
+
+/**
+ * AP 漫游选网模型推理类
+ *
+ * 加载 assets/ap_roaming_model.onnx 模型，提供 pairwise AP 比较预测功能
+ * 特征顺序必须与训练时一致：
+ * [rssi_a, rssi_b, rssi_diff, score_a, score_b, score_diff, prod_a, prod_b,
+ *  a_conn_down, b_conn_down, a_conn_up, b_conn_up, biz]
+ */
+class ApRoamingModel(context: Context) : ApPairwisePredictor {
+
+    companion object {
+        private const val TAG = "[ApRoamingModel]"
+        private const val MODEL_NAME = "ap_roaming_model.onnx"
+        private const val NUM_FEATURES = 13
+
+        // 归一化范围（模型内部参数，外部无需关心）
+        private const val RSSI_MIN = -120f
+        private const val RSSI_MAX = -30f
+        private const val SCORE_MAX = 100f
+
+        // 特征名称（用于日志）
+        private val FEATURE_NAMES = arrayOf(
+            "rssi_a", "rssi_b", "rssi_diff", "score_a", "score_b", "score_diff",
+            "prod_a", "prod_b", "a_conn_down", "b_conn_down", "a_conn_up", "b_conn_up", "biz"
+        )
+
+        // StandardScaler 参数（来自 convert_to_onnx.py 输出）
+        // 需要根据实际模型输出更新这些值
+        private val SCALER_MEAN = doubleArrayOf(
+            0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.25, 0.25,
+            0.5, 0.5, 0.5, 0.5, 0.5
+        )
+        private val SCALER_SCALE = doubleArrayOf(
+            0.5, 0.5, 1.0, 0.5, 0.5, 1.0, 0.25, 0.25,
+            0.5, 0.5, 0.5, 0.5, 0.5
+        )
+    }
+
+    private var ortEnvironment: OrtEnvironment? = null
+    private var ortSession: OrtSession? = null
+    private var isInitialized = false
+    private val logManager: RoamingLogManager = RoamingLogManager.getInstance(context)
+
+    init {
+        try {
+            initModel(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "模型初始化失败: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 从 assets 加载 ONNX 模型
+     */
+    private fun initModel(context: Context) {
+        // 将模型从 assets 复制到缓存目录
+        val modelFile = File(context.cacheDir, MODEL_NAME)
+        if (!modelFile.exists()) {
+            context.assets.open(MODEL_NAME).use { input ->
+                FileOutputStream(modelFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(TAG, "模型已复制到缓存: ${modelFile.absolutePath}")
+        }
+
+        // 初始化 ONNX Runtime
+        ortEnvironment = OrtEnvironment.getEnvironment()
+        ortSession = ortEnvironment?.createSession(modelFile.absolutePath)
+        isInitialized = true
+        Log.d(TAG, "ONNX 模型加载成功")
+    }
+
+    override fun predict(
+        rssiA: Float, scoreA: Float,
+        rssiB: Float, scoreB: Float,
+        connDownA: Boolean, connDownB: Boolean,
+        connUpA: Boolean, connUpB: Boolean,
+        isGame: Boolean,
+        ssidA: String?,
+        ssidB: String?
+    ): Float {
+        val rssiMin = RSSI_MIN
+        val rssiMax = RSSI_MAX
+        val scoreMax = SCORE_MAX
+        if (!isInitialized || ortSession == null) {
+            Log.w(TAG, "模型未初始化，返回默认概率 0.5")
+            return 0.5f
+        }
+
+        try {
+            // RSSI 归一化到 [0, 1]
+            val rssiDenom = (rssiMax - rssiMin).coerceAtLeast(1f)
+            val ra = ((rssiA - rssiMin) / rssiDenom).coerceIn(0f, 1f)
+            val rb = ((rssiB - rssiMin) / rssiDenom).coerceIn(0f, 1f)
+
+            // 评分归一化到 [0, 1]
+            val sa = (scoreA / scoreMax).coerceIn(0f, 1f)
+            val sb = (scoreB / scoreMax).coerceIn(0f, 1f)
+
+            // 构建特征向量
+            val rawFeatures = FloatArray(NUM_FEATURES)
+            val features = FloatArray(NUM_FEATURES) { i ->
+                rawFeatures[i] = when (i) {
+                    0 -> ra
+                    1 -> rb
+                    2 -> ra - rb
+                    3 -> sa
+                    4 -> sb
+                    5 -> sa - sb
+                    6 -> ra * sa
+                    7 -> rb * sb
+                    8 -> if (connDownA) 1f else 0f
+                    9 -> if (connDownB) 1f else 0f
+                    10 -> if (connUpA) 1f else 0f
+                    11 -> if (connUpB) 1f else 0f
+                    12 -> if (isGame) 1f else 0f
+                    else -> 0f
+                }
+                // StandardScaler 变换: (x - mean) / scale
+                ((rawFeatures[i] - SCALER_MEAN[i]) / SCALER_SCALE[i]).toFloat()
+            }
+
+            // 记录特征输入
+            val featureLog = StringBuilder()
+            featureLog.appendLine("【模型输入特征】${ssidA ?: "A"} vs ${ssidB ?: "B"}")
+            featureLog.appendLine("  原始值: RSSI_A=${rssiA}dBm(${String.format(Locale.US, "%.4f", ra)}), RSSI_B=${rssiB}dBm(${String.format(Locale.US, "%.4f", rb)}), " +
+                    "Score_A=${scoreA}(${String.format(Locale.US, "%.4f", sa)}), Score_B=${scoreB}(${String.format(Locale.US, "%.4f", sb)})")
+            featureLog.append("  特征向量: [")
+            for (i in 0 until NUM_FEATURES) {
+                featureLog.append("${FEATURE_NAMES[i]}=${String.format(Locale.US, "%.4f", features[i])}")
+                if (i < NUM_FEATURES - 1) featureLog.append(", ")
+            }
+            featureLog.append("]")
+            logManager.d(featureLog.toString())
+
+            // 创建输入张量
+            val inputBuffer = FloatBuffer.wrap(features)
+            val inputShape = longArrayOf(1, NUM_FEATURES.toLong())
+            val inputTensor = OnnxTensor.createTensor(ortEnvironment, inputBuffer, inputShape)
+
+            // 运行推理
+            inputTensor.use { tensor ->
+                val results = ortSession?.run(mapOf("features" to tensor))
+                results?.use { output ->
+                    // 获取输出概率
+                    val outputTensor = output[0] as? OnnxTensor
+                    val probabilities = outputTensor?.floatBuffer
+                    // 返回正类的概率（AP A 优于 AP B）
+                    val prob = probabilities?.get(0) ?: 0.5f
+                    logManager.d("【模型输出】prob(A>B)=${String.format(Locale.US, "%.4f", prob)}, prob(B>A)=${String.format(Locale.US, "%.4f", 1 - prob)}")
+                    return prob
+                }
+            }
+
+            return 0.5f
+        } catch (e: Exception) {
+            Log.e(TAG, "推理失败: ${e.message}", e)
+            logManager.e("模型推理失败: ${e.message}")
+            return 0.5f
+        }
+    }
+
+    /**
+     * 释放模型资源
+     */
+    override fun close() {
+        try {
+            ortSession?.close()
+            ortEnvironment?.close()
+            isInitialized = false
+            Log.d(TAG, "模型资源已释放")
+        } catch (e: Exception) {
+            Log.e(TAG, "释放资源失败: ${e.message}", e)
+        }
+    }
+}

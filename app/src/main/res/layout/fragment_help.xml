@@ -47,6 +47,7 @@
         android:id="@+id/card_auto_connect"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
         android:clickable="true"
         android:focusable="true"
         app:cardCornerRadius="12dp"
@@ -65,6 +66,41 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="无法自动连接？"
+                android:textColor="#333333"
+                android:textSize="16sp" />
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:rotation="-90"
+                android:src="@drawable/ic_expand_more"
+                android:tint="#BBBBBB" />
+        </LinearLayout>
+
+    </com.google.android.material.card.MaterialCardView>
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/card_roaming_log"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clickable="true"
+        android:focusable="true"
+        app:cardCornerRadius="12dp"
+        app:cardElevation="2dp"
+        app:rippleColor="#1A42CDB6">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="查看漫游日志"
                 android:textColor="#333333"
                 android:textSize="16sp" />
 

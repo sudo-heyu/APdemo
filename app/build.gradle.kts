@@ -58,6 +58,9 @@ dependencies {
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // ONNX Runtime for ML inference
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.3")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
