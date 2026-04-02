@@ -29,6 +29,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.heyu.apdemo2.R
+import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
 
 class MainActivity : AppCompatActivity() {
@@ -340,12 +341,48 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_settings -> { showServerInputDialog(); true }
+            R.id.action_roaming_log -> { showRoamingLog(); true }
             R.id.action_auto_roaming -> {
                 // 点击事件已在 setupRoamingButton 中处理
                 true
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun showRoamingLog() {
+        val logManager = RoamingLogManager.getInstance(this)
+        val logs = logManager.getLogs()
+        val logSize = logManager.getLogSize()
+
+        val reversedLogs = if (logs.isEmpty()) "暂无日志"
+        else logs.lines().asReversed().joinToString("\n")
+
+        val scrollView = android.widget.ScrollView(this)
+        val tv = TextView(this).apply {
+            text = reversedLogs
+            textSize = 12f
+            setTextColor(0xFF333333.toInt())
+            setLineSpacing(0f, 1.3f)
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+        }
+        scrollView.addView(tv)
+
+        val sizeStr = when {
+            logSize < 1024 -> "$logSize B"
+            logSize < 1024 * 1024 -> "${logSize / 1024} KB"
+            else -> "${logSize / (1024 * 1024)} MB"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("漫游算法日志 ($sizeStr)")
+            .setView(scrollView)
+            .setPositiveButton("关闭", null)
+            .setNeutralButton("清空") { _, _ ->
+                logManager.clearLogs()
+            }
+            .show()
     }
 
     // ── 配置对话框 ──────────────────────────────────────────────────────────

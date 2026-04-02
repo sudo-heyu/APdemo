@@ -334,6 +334,11 @@ class ScanForegroundService : Service() {
                     if (!isRunning || cycleId != currentCycleId) return@post
                     Log.e(TAG, "!!! 初始同步失败: $error")
                     roamingLogManager.e("【服务器同步失败】$error")
+                    // 服务器失败也触发漫游评估，使用默认评分
+                    if (autoRoamingEnabled) {
+                        roamingLogManager.i("【降级模式】服务器不可用，使用默认评分执行漫游评估")
+                        evaluateAndTriggerRoaming()
+                    }
                     startWaitingPhase(cycleId, "评分同步失败")
                 }
             }
@@ -381,7 +386,14 @@ class ScanForegroundService : Service() {
             }
             override fun onError(error: String) {
                 Log.e(TAG, "轮询评分失败: $error")
-                handler.post { roamingLogManager.e("【轮询同步失败】$error") }
+                handler.post {
+                    roamingLogManager.e("【轮询同步失败】$error")
+                    // 轮询失败也触发漫游评估，使用现有评分（可能是默认值）
+                    if (autoRoamingEnabled) {
+                        roamingLogManager.i("【降级模式】轮询失败，使用现有评分执行漫游评估")
+                        evaluateAndTriggerRoaming()
+                    }
+                }
             }
         })
     }
@@ -428,16 +440,37 @@ class ScanForegroundService : Service() {
             return
         }
 
-        val currentAp = currentAccessPoints.find { it.ssid == currentConnectedSsid }
+        // 过滤掉没有保存密码的加密AP（只保留开放网络 + 已存密码的加密网络）
+        val connectableAps = currentAccessPoints.filter { ap ->
+            if (!ap.isSecured()) {
+                true // 开放网络，可连接
+            } else {
+                val hasPassword = !PasswordStore.get(this, ap.ssid).isNullOrEmpty()
+                if (!hasPassword) {
+                    roamingLogManager.d("【密码过滤】排除 ${ap.ssid}（加密但未保存密码）")
+                }
+                hasPassword
+            }
+        }
+
+        if (connectableAps.isEmpty()) {
+            roamingLogManager.w("【漫游评估】过滤后无可连接AP（均需密码但未保存）")
+            roamingLogManager.i("=".repeat(60))
+            return
+        }
+
+        roamingLogManager.i("【密码过滤】${currentAccessPoints.size} 个AP → ${connectableAps.size} 个可连接AP")
+
+        val currentAp = connectableAps.find { it.ssid == currentConnectedSsid }
         roamingLogManager.i("【当前连接】${currentAp?.ssid ?: "无"}, RSSI: ${currentAp?.rssi ?: "N/A"}dBm, 评分: ${currentAp?.score ?: "N/A"}")
 
-        roamingLogManager.d("【候选AP概览】")
-        currentAccessPoints.forEach { ap ->
+        roamingLogManager.d("【候选AP概览（可连接）】")
+        connectableAps.forEach { ap ->
             val marker = if (ap.ssid == currentConnectedSsid) " ← 当前" else ""
             roamingLogManager.d("  ${ap.ssid} | RSSI: ${ap.rssi}dBm | 评分: ${ap.score ?: "N/A"}$marker")
         }
 
-        val bestAp = apSelectionManager.selectBestAp(currentAccessPoints, isGameMode = false)
+        val bestAp = apSelectionManager.selectBestAp(connectableAps, isGameMode = false)
 
         if (bestAp == null) {
             roamingLogManager.i("【算法推荐】无法选出最佳AP")
