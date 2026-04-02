@@ -194,26 +194,20 @@ com.heyu.apdemo2
     ↓
 触发连接 (triggerRoamingConnection)
     ↓
-⚠️ 问题：使用旧版 wifiConnector.connect()
+✅ 统一使用 connectWithSpecifier()
     ↓
-⚠️ 问题：状态同步不可靠
+回调更新 currentConnectedSsid
 ```
 
 ---
 
 ## 6. 已知问题汇总
 
-### 6.1 严重问题
+### 6.1 待验证问题
 
-1. **漫游连接机制不一致**
-   - 手动连接使用 `connectWithSpecifier()`
-   - 漫游使用 `wifiConnector.connect()`
-   - 两者状态管理不统一
-
-2. **状态同步不可靠**
-   - `currentConnectedSsid` 只在回调中更新
-   - 没有监听系统 WiFi 广播校正
-   - 可能导致漫游决策基于错误状态
+1. **漫游后状态同步**
+   - 漫游和手动连接已统一使用 `connectWithSpecifier()`
+   - 需要验证 `currentConnectedSsid` 更新是否可靠
 
 ### 6.2 中等问题
 
@@ -249,3 +243,4 @@ com.heyu.apdemo2
 | 日期 | 更新内容 |
 |------|----------|
 | 2025-04-02 | 重构文档结构，增加待实现功能清单，补充漫游和日志模块状态 |
+| 2025-04-02 | 统一连接机制：漫游和手动连接都使用 connectWithSpecifier() |

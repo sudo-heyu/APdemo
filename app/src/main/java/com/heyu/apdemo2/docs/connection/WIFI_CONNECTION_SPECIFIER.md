@@ -1,8 +1,10 @@
 # WiFi 连接实现细节文档
 
-> 本文档详细说明 APdemo2 项目中 WiFi 连接的实现方式，特别是 `WifiNetworkSpecifier` 的使用细节，以及可能产生干扰的函数和废弃模块。
+> 本文档详细说明 APdemo2 项目中 WiFi 连接的实现方式，特别是 `WifiNetworkSpecifier` 的使用细节。
 > 
-> 最后更新：2026-04-02
+> **更新记录**:
+> - 2026-04-02: 初始版本，标记废弃模块
+> - 2026-04-02: 已删除 Method2ActionWifiAddNetworks、WifiAutoConnectService，统一使用 Specifier
 
 ---
 
@@ -65,91 +67,52 @@ isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_
 
 ---
 
-## 2. 干扰函数与废弃模块警告
+## 2. 已删除的干扰模块
 
-### ⚠️ 2.1 废弃：WifiNetworkSuggestion（方式一/二）
+以下模块已被删除，不再存在于代码库中：
 
-**文件位置**:
-- `connection/WifiConnector.kt` (第 84-166 行)
-- `connection/Method2ActionWifiAddNetworks.kt` (整个文件)
+### ✅ 2.1 已删除：Method2ActionWifiAddNetworks
 
-**废弃原因**:
-- `WifiNetworkSuggestion` 旨在提供**系统级真实连接**
-- 但首次使用需要用户在系统通知栏批准「允许 AppName 建议 WiFi」
-- Android 10+ 系统限制严格，许多 OEM 设备（小米、华为、vivo）存在兼容性问题
-- **与 Specifier 方式混用会导致连接状态混乱**
+**原文件位置**: `connection/Method2ActionWifiAddNetworks.kt`
 
-**禁用标记**:
+**删除原因**:
+- 使用 `ACTION_WIFI_ADD_NETWORKS` Intent 弹出系统对话框
+- 与 Specifier 方式混用会导致连接状态混乱
+- 代码复杂，包含大量 fallback 逻辑
+
+**删除时间**: 2026-04-02
+
+---
+
+### ✅ 2.2 已删除：WifiAutoConnectService
+
+**原文件位置**: `connection/WifiAutoConnectService.kt`
+
+**删除原因**:
+- 无障碍服务与 Specifier 方式不兼容
+- Specifier 不需要打开系统设置页面
+
+**删除时间**: 2026-04-02
+
+---
+
+### ⚠️ 2.3 已简化：WifiConnector
+
+**文件位置**: `connection/WifiConnector.kt`
+
+**当前状态**:
+- 已移除 `WifiNetworkSuggestion` 相关代码
+- 仅保留 Android 9 及以下传统连接方式
+- Android 10+ 直接返回错误，提示使用 Specifier
+
+**使用警告**:
 ```kotlin
-// WifiConnector.kt:71-75
+// Android 10+ 上会直接失败
 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-    connectViaSuggestion(...)  // 当前代码中已不调用
-} else {
-    connectLegacy(...)  // Android 9 及以下
+    onFailed("Android 10+ 请使用 WifiNetworkSpecifier 方式连接")
+    return
 }
 ```
-
-**干扰风险**: ⭐⭐⭐⭐⭐ (极高)
-- 如果同时启用，Suggestion 和 Specifier 会竞争网络连接
-- 导致 `onConnected` 回调多次触发
-- 状态栏显示与实际连接不一致
-
----
-
-### ⚠️ 2.2 废弃：WifiConfiguration.addNetwork（传统方式）
-
-**文件位置**:
-- `connection/WifiConnector.kt` (第 249-277 行)
-- `connection/Method2ActionWifiAddNetworks.kt` (第 252-346 行)
-
-**废弃原因**:
-- Android 10+ (API 29) 开始，`WifiManager.addNetwork()` 返回 `-1`（失败）
-- 系统禁止应用直接修改 WiFi 配置
-- 需要 `CHANGE_WIFI_STATE` 权限，但在新系统上无效
-
-**代码中的废弃标记**:
-```kotlin
-@Suppress("DEPRECATION")
-private fun connectLegacy(...) { ... }
-```
-
-**干扰风险**: ⭐⭐⭐ (中等)
-- 在 Android 10+ 上调用会静默失败
-- 不会直接导致崩溃，但会误导开发者认为连接已发起
-
----
-
-### ⚠️ 2.3 危险：Method2ActionWifiAddNetworks 类
-
-**文件位置**: `connection/Method2ActionWifiAddNetworks.kt`
-
-**危险操作**:
-1. 反射调用 `WifiManager.forget()` 方法 (第 173-183 行)
-2. 尝试启用已保存网络 (第 252-313 行)
-3. 使用 `ACTION_WIFI_ADD_NETWORKS` Intent (第 100 行)
-
-**干扰风险**: ⭐⭐⭐⭐⭐ (极高)
-- 此类中的方法**不应被调用**
-- 如果意外调用，会导致系统 WiFi 设置页面弹出
-- 破坏当前 Specifier 连接状态
-
----
-
-### ⚠️ 2.4 注意：WifiAutoConnectService（无障碍服务）
-
-**文件位置**: `connection/WifiAutoConnectService.kt`
-
-**功能说明**:
-- 通过 Android 无障碍服务自动点击系统 WiFi 设置页面
-- 用于在 `ACTION_WIFI_ADD_NETWORKS` 失败后自动输入密码
-
-**当前状态**: 
-- 与 Specifier 方式**不兼容**
-- 因为 Specifier 不需要打开系统设置页面
-
-**干扰风险**: ⭐⭐⭐ (中等)
-- 如果启用，会尝试点击不存在的 UI 元素
-- 消耗系统资源，无实际效果
 
 ---
 
@@ -222,25 +185,29 @@ val systemSsid = getSystemConnectedSsid()  // WifiFragment:167
 
 ---
 
-## 5. 代码清理建议
+## 5. 代码清理状态
 
-### 5.1 可删除的文件（如果确认不再使用）
+### 5.1 已完成的清理
 
-1. `connection/Method2ActionWifiAddNetworks.kt` - 整个文件已废弃
-2. `connection/WifiAutoConnectService.kt` - 无障碍服务已废弃
-3. `connection/WifiConnector.kt` - 可简化为仅保留 Android 9 支持
+| 文件 | 操作 | 状态 |
+|------|------|------|
+| `Method2ActionWifiAddNetworks.kt` | 删除 | ✅ 已完成 |
+| `WifiAutoConnectService.kt` | 删除 | ✅ 已完成 |
+| `WifiConnector.kt` | 简化 | ✅ 已完成 |
+| `ScanForegroundService.kt` | 统一使用 Specifier | ✅ 已完成 |
+| `AndroidManifest.xml` | 移除无障碍服务声明 | ✅ 已完成 |
 
-### 5.2 需要保留但标记为废弃的代码
+### 5.2 统一后的连接机制
 
 ```kotlin
-// 在 WifiConnector.kt 顶部添加
-@Deprecated("使用 WifiNetworkSpecifier 替代", ReplaceWith("ScanForegroundService.connectWithSpecifier()"))
-class WifiConnector { ... }
+// 手动连接（WifiFragment）
+initiateConnect() → service.connectWithSpecifier()
 
-// 在 Method2ActionWifiAddNetworks.kt 顶部添加
-@Deprecated("此方式已废弃，使用 WifiNetworkSpecifier 替代", level = DeprecationLevel.ERROR)
-class Method2ActionWifiAddNetworks { ... }
+// 自动漫游（ScanForegroundService）
+triggerRoamingConnection() → connectWithSpecifier()
 ```
+
+两者现在使用完全相同的连接机制。
 
 ---
 

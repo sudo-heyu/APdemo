@@ -26,7 +26,6 @@ import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import com.heyu.apdemo2.R
 import com.heyu.apdemo2.connection.PasswordStore
-import com.heyu.apdemo2.connection.WifiConnector
 import com.heyu.apdemo2.model.AccessPoint
 import com.heyu.apdemo2.model.ScanResponse
 import com.heyu.apdemo2.network.ApiService
@@ -55,7 +54,6 @@ class ScanForegroundService : Service() {
     private lateinit var roamingLogManager: RoamingLogManager
 
     private lateinit var wifiScanner: WifiScanner
-    private lateinit var wifiConnector: WifiConnector
     private lateinit var apSelectionManager: ApSelectionManager
     private val apiService = ApiService()
 
@@ -142,9 +140,8 @@ class ScanForegroundService : Service() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "APdemo2:ScanWakeLock")
 
-        // 3. WifiScanner 和 WifiConnector 传入 HandlerThread 的 Looper
+        // 3. WifiScanner 传入 HandlerThread 的 Looper
         wifiScanner = WifiScanner(this, handlerThread.looper)
-        wifiConnector = WifiConnector(this, handler)
         apSelectionManager = ApSelectionManager(this)
 
         createNotificationChannel()
@@ -201,46 +198,42 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 连接到指定 AP。若当前已 pinned 同一 SSID 则忽略；
-     * 若传入 null 或空密码（开放网络）则直接发起连接。
+     * 连接到指定 AP（统一使用 WifiNetworkSpecifier）。
+     * 若当前已 pinned 同一 SSID 则忽略；若传入 null 或空密码（开放网络）则直接发起连接。
      */
     fun connectToNetwork(ssid: String, isOpen: Boolean, password: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "Android 9 及以下不支持 WifiNetworkSpecifier")
+            callback?.onConnectionChanged(null, false, "需要 Android 10+")
+            return
+        }
         pinnedPassword = password
         pinnedIsOpen = isOpen
-        handler.post {
-            wifiConnector.connect(
-                ssid = ssid,
-                isOpen = isOpen,
-                password = password,
-                onConnected = {
-                    pinnedSsid = ssid
-                    Log.d(TAG, "已连接并置顶: $ssid")
-                    callback?.onConnectionChanged(ssid, true)
-                },
-                onFailed = { error ->
-                    Log.w(TAG, "连接失败: $error")
-                    if (pinnedSsid == ssid) pinnedSsid = null
-                    callback?.onConnectionChanged(null, false, error)
-                },
-                onReconnecting = { attempt ->
-                    Log.d(TAG, "重连中: $ssid 第 $attempt 次")
-                    callback?.onReconnecting(ssid, attempt)
-                },
-                onApprovalNeeded = {
-                    Log.w(TAG, "需要用户授权 Suggestion 权限")
-                    callback?.onApprovalNeeded()
+        connectWithSpecifier(ssid, password, object : SpecifierConnectionCallback {
+            override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
+                pinnedSsid = ssid
+                Log.d(TAG, "已连接并置顶: $ssid")
+                callback?.onConnectionChanged(ssid, true)
+            }
+            override fun onFailed(failedSsid: String, error: String) {
+                Log.w(TAG, "连接失败: $error")
+                if (pinnedSsid == ssid) pinnedSsid = null
+                callback?.onConnectionChanged(null, false, error)
+            }
+            override fun onLost(lostSsid: String?) {
+                if (pinnedSsid == lostSsid) {
+                    pinnedSsid = null
+                    callback?.onConnectionChanged(null, false)
                 }
-            )
-        }
+            }
+        })
     }
 
     /** 断开当前 pinned 连接并清除置顶。 */
     fun disconnectPinned() {
-        handler.post {
-            wifiConnector.disconnect()
-            pinnedSsid = null
-            callback?.onConnectionChanged(null, false)
-        }
+        releaseSpecifierConnection()
+        pinnedSsid = null
+        callback?.onConnectionChanged(null, false)
     }
 
     fun updateConfig(ip: String, port: Int, poll: Long, cycle: Long) {
@@ -482,7 +475,7 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 触发漫游连接
+     * 触发漫游连接（统一使用 WifiNetworkSpecifier）
      */
     private fun triggerRoamingConnection(targetAp: AccessPoint) {
         val password = PasswordStore.get(this, targetAp.ssid) ?: ""
@@ -493,32 +486,31 @@ class ScanForegroundService : Service() {
             return
         }
 
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            roamingLogManager.w("【切换失败】Android 9 及以下不支持自动漫游")
+            return
+        }
+
         roamingLogManager.i("【开始切换】目标AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, 类型: ${if (isOpen) "开放" else "加密"}")
 
-        handler.post {
-            wifiConnector.connect(
-                ssid = targetAp.ssid,
-                isOpen = isOpen,
-                password = password,
-                onConnected = {
-                    currentConnectedSsid = targetAp.ssid
-                    roamingLogManager.i("【切换成功】已连接到 ${targetAp.ssid}")
-                    callback?.onConnectionChanged(targetAp.ssid, true)
-                },
-                onFailed = { errorMsg ->
-                    roamingLogManager.e("【切换失败】${targetAp.ssid}: $errorMsg")
-                    callback?.onConnectionChanged(null, false, errorMsg)
-                },
-                onReconnecting = { attemptNum ->
-                    roamingLogManager.w("【切换重试】${targetAp.ssid} 第${attemptNum}次尝试")
-                    callback?.onReconnecting(targetAp.ssid, attemptNum)
-                },
-                onApprovalNeeded = {
-                    roamingLogManager.w("【切换需要授权】${targetAp.ssid} 需要用户确认")
-                    callback?.onApprovalNeeded()
+        connectWithSpecifier(targetAp.ssid, password, object : SpecifierConnectionCallback {
+            override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
+                currentConnectedSsid = targetAp.ssid
+                roamingLogManager.i("【切换成功】已连接到 ${targetAp.ssid}")
+                callback?.onConnectionChanged(targetAp.ssid, true)
+            }
+            override fun onFailed(failedSsid: String, error: String) {
+                roamingLogManager.e("【切换失败】${targetAp.ssid}: $error")
+                callback?.onConnectionChanged(null, false, error)
+            }
+            override fun onLost(lostSsid: String?) {
+                if (currentConnectedSsid == lostSsid) {
+                    currentConnectedSsid = null
+                    roamingLogManager.i("【连接断开】${lostSsid}")
+                    callback?.onConnectionChanged(null, false)
                 }
-            )
-        }
+            }
+        })
     }
 
     /**
@@ -646,7 +638,6 @@ class ScanForegroundService : Service() {
         cancelNextCycleAlarm()
         handlerThread.quit()
         wifiScanner.stopScan()
-        wifiConnector.disconnect()
         apSelectionManager.close()
         releaseSpecifierConnection()
         releaseWakeLock()
