@@ -13,6 +13,10 @@ import java.util.Locale
  */
 class RoamingLogManager private constructor(context: Context) {
 
+    fun interface OnLogListener {
+        fun onNewLog(logLine: String)
+    }
+
     companion object {
         private const val TAG = "[RoamingLog]"
         private const val LOG_FILE_NAME = "roaming_algorithm.log"
@@ -32,6 +36,7 @@ class RoamingLogManager private constructor(context: Context) {
 
     private val logFile = File(context.filesDir, LOG_FILE_NAME)
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    private val listeners = mutableListOf<OnLogListener>()
 
     init {
         // 确保日志文件存在
@@ -40,12 +45,20 @@ class RoamingLogManager private constructor(context: Context) {
         }
     }
 
+    fun addListener(listener: OnLogListener) {
+        synchronized(listeners) { listeners.add(listener) }
+    }
+
+    fun removeListener(listener: OnLogListener) {
+        synchronized(listeners) { listeners.remove(listener) }
+    }
+
     /**
      * 记录日志
      */
     fun log(level: String, message: String) {
         val timestamp = dateFormat.format(Date())
-        val logLine = "[$timestamp] [$level] $message\n"
+        val logLine = "[$timestamp] [$level] $message"
 
         // 同时输出到Logcat
         when (level) {
@@ -58,15 +71,19 @@ class RoamingLogManager private constructor(context: Context) {
 
         // 写入文件
         try {
-            // 检查文件大小
             if (logFile.length() > MAX_LOG_SIZE) {
-                logFile.writeText("") // 清空文件
+                logFile.writeText("")
                 val resetLine = "[$timestamp] [I] 日志文件超过1MB，已自动清空\n"
                 logFile.appendText(resetLine)
             }
-            logFile.appendText(logLine)
+            logFile.appendText(logLine + "\n")
         } catch (e: Exception) {
             Log.e(TAG, "写入日志失败: ${e.message}")
+        }
+
+        // 通知监听器
+        synchronized(listeners) {
+            listeners.forEach { it.onNewLog(logLine) }
         }
     }
 

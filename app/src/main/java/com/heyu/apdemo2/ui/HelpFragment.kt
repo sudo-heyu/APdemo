@@ -42,39 +42,41 @@ class HelpFragment : Fragment() {
         val ctx = requireContext()
         val logManager = RoamingLogManager.getInstance(ctx)
         val logs = logManager.getLogs()
-        val logSize = logManager.getLogSize()
 
-        // 倒序显示：最新日志在最上面
-        val reversedLogs = if (logs.isEmpty()) "暂无日志"
-        else logs.lines().asReversed().joinToString("\n")
-
+        val pad = (16 * resources.displayMetrics.density).toInt()
         val scrollView = ScrollView(ctx)
         val tv = TextView(ctx).apply {
-            text = reversedLogs
+            text = if (logs.isEmpty()) "暂无日志" else logs
             textSize = 12f
             setTextColor(0xFF333333.toInt())
             setLineSpacing(0f, 1.3f)
-            val pad = (16 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
         }
         scrollView.addView(tv)
 
+        val listener = RoamingLogManager.OnLogListener { logLine ->
+            activity?.runOnUiThread {
+                tv.append("\n$logLine")
+                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
+        }
+        logManager.addListener(listener)
+
         AlertDialog.Builder(ctx)
-            .setTitle("漫游算法日志 (${formatFileSize(logSize)})")
+            .setTitle("漫游算法日志")
             .setView(scrollView)
             .setPositiveButton("关闭", null)
             .setNeutralButton("清空") { _, _ ->
                 logManager.clearLogs()
+                tv.text = "日志已清空"
+            }
+            .setOnDismissListener {
+                logManager.removeListener(listener)
             }
             .show()
-    }
-
-    private fun formatFileSize(size: Long): String {
-        return when {
-            size < 1024 -> "$size B"
-            size < 1024 * 1024 -> "${size / 1024} KB"
-            else -> "${size / (1024 * 1024)} MB"
-        }
+            .also {
+                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
     }
 
     private fun showDetail(title: String, content: String) {

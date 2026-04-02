@@ -63,7 +63,6 @@ class ApSelectionManager(
         candidates: List<AccessPoint>,
         isGameMode: Boolean = false
     ): AccessPoint? {
-        logManager.i("=" .repeat(60))
         logManager.i("【AP选择算法开始】候选AP数量: ${candidates.size}, 游戏模式: $isGameMode")
 
         if (candidates.isEmpty()) {

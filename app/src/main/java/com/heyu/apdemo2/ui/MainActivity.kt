@@ -46,8 +46,8 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "server_settings"
         private const val KEY_IP = "server_ip"
         private const val KEY_PORT = "server_port"
+        private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val KEY_POLL_INTERVAL = "poll_interval"
-        private const val KEY_CYCLE_INTERVAL = "cycle_interval"
         private const val KEY_AUTO_ROAMING = "auto_roaming"
     }
 
@@ -195,14 +195,14 @@ class MainActivity : AppCompatActivity() {
     private fun startAndBindService() {
         val (ip, port) = getServerAddress()
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val poll = prefs.getLong(KEY_POLL_INTERVAL, 10000L)
-        val cycle = prefs.getLong(KEY_CYCLE_INTERVAL, 150000L)
+        val scanInt = prefs.getLong(KEY_SCAN_INTERVAL, 35000L)
+        val pollInt = prefs.getLong(KEY_POLL_INTERVAL, 10000L)
 
         val intent = Intent(this, ScanForegroundService::class.java).apply {
             putExtra(ScanForegroundService.EXTRA_IP, ip)
             putExtra(ScanForegroundService.EXTRA_PORT, port)
-            putExtra(ScanForegroundService.EXTRA_POLL, poll)
-            putExtra(ScanForegroundService.EXTRA_CYCLE, cycle)
+            putExtra(ScanForegroundService.EXTRA_SCAN_INTERVAL, scanInt)
+            putExtra(ScanForegroundService.EXTRA_POLL_INTERVAL, pollInt)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -353,36 +353,43 @@ class MainActivity : AppCompatActivity() {
     private fun showRoamingLog() {
         val logManager = RoamingLogManager.getInstance(this)
         val logs = logManager.getLogs()
-        val logSize = logManager.getLogSize()
 
-        val reversedLogs = if (logs.isEmpty()) "暂无日志"
-        else logs.lines().asReversed().joinToString("\n")
-
+        val pad = (16 * resources.displayMetrics.density).toInt()
         val scrollView = android.widget.ScrollView(this)
         val tv = TextView(this).apply {
-            text = reversedLogs
+            text = if (logs.isEmpty()) "暂无日志" else logs
             textSize = 12f
             setTextColor(0xFF333333.toInt())
             setLineSpacing(0f, 1.3f)
-            val pad = (16 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
         }
         scrollView.addView(tv)
 
-        val sizeStr = when {
-            logSize < 1024 -> "$logSize B"
-            logSize < 1024 * 1024 -> "${logSize / 1024} KB"
-            else -> "${logSize / (1024 * 1024)} MB"
+        // 实时日志监听：新日志追加到底部并自动滚动
+        val listener = RoamingLogManager.OnLogListener { logLine ->
+            runOnUiThread {
+                tv.append("\n$logLine")
+                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
         }
+        logManager.addListener(listener)
 
         AlertDialog.Builder(this)
-            .setTitle("漫游算法日志 ($sizeStr)")
+            .setTitle("漫游算法日志")
             .setView(scrollView)
             .setPositiveButton("关闭", null)
             .setNeutralButton("清空") { _, _ ->
                 logManager.clearLogs()
+                tv.text = "日志已清空"
+            }
+            .setOnDismissListener {
+                logManager.removeListener(listener)
             }
             .show()
+            .also { dialog ->
+                // 打开时滚动到底部（最新日志）
+                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
     }
 
     // ── 配置对话框 ──────────────────────────────────────────────────────────
@@ -396,8 +403,8 @@ class MainActivity : AppCompatActivity() {
         val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val currentIp = sharedPref.getString(KEY_IP, "")
         val currentPort = sharedPref.getInt(KEY_PORT, -1)
-        val currentPoll = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L) / 1000
-        val currentCycle = sharedPref.getLong(KEY_CYCLE_INTERVAL, 150000L) / 1000
+        val currentScanInt = sharedPref.getLong(KEY_SCAN_INTERVAL, 35000L) / 1000
+        val currentPollInt = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L) / 1000
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -408,20 +415,20 @@ class MainActivity : AppCompatActivity() {
             hint = "端口"; inputType = InputType.TYPE_CLASS_NUMBER
             if (currentPort != -1) setText(currentPort.toString())
         }
-        val pollInput = EditText(this).apply {
-            hint = "Reason刷新 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
-            setText(currentPoll.toString())
+        val scanIntInput = EditText(this).apply {
+            hint = "扫描间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
+            setText(currentScanInt.toString())
         }
-        val cycleInput = EditText(this).apply {
-            hint = "WiFi扫描频率 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
-            setText(currentCycle.toString())
+        val pollIntInput = EditText(this).apply {
+            hint = "后端请求间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
+            setText(currentPollInt.toString())
         }
         container.addView(ipInput)
         container.addView(portInput)
-        container.addView(TextView(this).apply { text = "\nReason刷新 (秒):" })
-        container.addView(pollInput)
-        container.addView(TextView(this).apply { text = "\nWiFi扫描频率 (秒):" })
-        container.addView(cycleInput)
+        container.addView(TextView(this).apply { text = "\n扫描间隔 (秒):" })
+        container.addView(scanIntInput)
+        container.addView(TextView(this).apply { text = "\n后端请求间隔 (秒):" })
+        container.addView(pollIntInput)
 
         AlertDialog.Builder(this)
             .setTitle("参数配置")
@@ -429,18 +436,18 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("保存") { _, _ ->
                 val ip = ipInput.text.toString().trim()
                 val p = portInput.text.toString().trim()
-                val poll = pollInput.text.toString().trim().toLongOrNull() ?: 10L
-                val cycle = cycleInput.text.toString().trim().toLongOrNull() ?: 150L
+                val scanInt = scanIntInput.text.toString().trim().toLongOrNull() ?: 35L
+                val pollInt = pollIntInput.text.toString().trim().toLongOrNull() ?: 10L
                 if (ip.isNotEmpty() && p.isNotEmpty()) {
                     val port = p.toInt()
                     sharedPref.edit()
                         .putString(KEY_IP, ip)
                         .putInt(KEY_PORT, port)
-                        .putLong(KEY_POLL_INTERVAL, poll * 1000)
-                        .putLong(KEY_CYCLE_INTERVAL, cycle * 1000)
+                        .putLong(KEY_SCAN_INTERVAL, scanInt * 1000)
+                        .putLong(KEY_POLL_INTERVAL, pollInt * 1000)
                         .apply()
                     if (isBound) {
-                        scanService?.updateConfig(ip, port, poll * 1000, cycle * 1000)
+                        scanService?.updateConfig(ip, port, scanInt * 1000, pollInt * 1000)
                     } else {
                         checkAndRequestPermissions()
                     }

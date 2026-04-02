@@ -5,14 +5,15 @@
 > **更新记录**:
 > - 2026-04-02: 初始版本，标记废弃模块
 > - 2026-04-02: 已删除 Method2ActionWifiAddNetworks、WifiAutoConnectService，统一使用 Specifier
+> - 2026-04-02: 扫描简化为单次模式，漫游评估增加密码过滤和降级模式
 
 ---
 
 ## 1. 当前主要连接方式：WifiNetworkSpecifier
 
 ### 1.1 实现位置
-- **核心代码**: `service/ScanForegroundService.kt` (第 655-748 行)
-- **UI 调用**: `ui/WifiFragment.kt` (第 233-282 行)
+- **核心代码**: `service/ScanForegroundService.kt`（`connectWithSpecifier()` 方法）
+- **UI 调用**: `ui/WifiFragment.kt`（`initiateConnect()` 方法）
 
 ### 1.2 工作原理
 
@@ -47,7 +48,6 @@ connectivityManager.requestNetwork(request, callback)
 ### 1.4 连接状态分类
 
 ```kotlin
-// ScanForegroundService.kt:686-688
 val caps = connectivityManager.getNetworkCapabilities(network)
 isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
                         caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
@@ -56,7 +56,11 @@ isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_
 - **系统级连接** (`[系统]`): 网络具有 `NET_CAPABILITY_INTERNET` 和 `NET_CAPABILITY_VALIDATED` 能力
 - **本地连接** (`[本地]`): 仅应用内可用，系统状态栏不显示已连接
 
-### 1.5 生命周期管理
+### 1.5 已知行为
+
+**系统对话框延迟**: 系统弹出的 "正在连接到设备" 对话框 UI 刷新与底层网络连接是异步的。WiFi 握手可能已完成（`onAvailable` 已回调），但对话框仍显示"正在连接"。用户按返回键可关闭对话框，此时连接实际已建立。这是 Android 系统 `NetworkRequestDialogActivity` 的行为，非 app 层面问题。
+
+### 1.6 生命周期管理
 
 ```kotlin
 // 释放连接时必须执行以下操作：
@@ -67,24 +71,50 @@ isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_
 
 ---
 
-## 2. 已删除的干扰模块
+## 2. 漫游连接机制
+
+### 2.1 统一连接
+
+漫游和手动连接使用完全相同的 `connectWithSpecifier()` 方法：
+
+```kotlin
+// 手动连接（WifiFragment）
+initiateConnect() → service.connectWithSpecifier()
+
+// 自动漫游（ScanForegroundService）
+triggerRoamingConnection() → connectWithSpecifier()
+```
+
+### 2.2 漫游前的密码过滤
+
+漫游评估前会过滤掉不可连接的 AP：
+
+```kotlin
+val connectableAps = currentAccessPoints.filter { ap ->
+    if (!ap.isSecured()) true  // 开放网络
+    else !PasswordStore.get(this, ap.ssid).isNullOrEmpty()  // 已存密码
+}
+```
+
+只有可连接的 AP 才会传入选网算法，避免算法选出无法连接的 AP。
+
+---
+
+## 3. 已删除的干扰模块
 
 以下模块已被删除，不再存在于代码库中：
 
-### ✅ 2.1 已删除：Method2ActionWifiAddNetworks
+### ✅ 3.1 已删除：Method2ActionWifiAddNetworks
 
 **原文件位置**: `connection/Method2ActionWifiAddNetworks.kt`
 
 **删除原因**:
 - 使用 `ACTION_WIFI_ADD_NETWORKS` Intent 弹出系统对话框
 - 与 Specifier 方式混用会导致连接状态混乱
-- 代码复杂，包含大量 fallback 逻辑
 
 **删除时间**: 2026-04-02
 
----
-
-### ✅ 2.2 已删除：WifiAutoConnectService
+### ✅ 3.2 已删除：WifiAutoConnectService
 
 **原文件位置**: `connection/WifiAutoConnectService.kt`
 
@@ -94,9 +124,7 @@ isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_
 
 **删除时间**: 2026-04-02
 
----
-
-### ⚠️ 2.3 已简化：WifiConnector
+### ⚠️ 3.3 已简化：WifiConnector
 
 **文件位置**: `connection/WifiConnector.kt`
 
@@ -105,20 +133,11 @@ isSystemWifiConnection = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_
 - 仅保留 Android 9 及以下传统连接方式
 - Android 10+ 直接返回错误，提示使用 Specifier
 
-**使用警告**:
-```kotlin
-// Android 10+ 上会直接失败
-if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-    onFailed("Android 10+ 请使用 WifiNetworkSpecifier 方式连接")
-    return
-}
-```
-
 ---
 
-## 3. 正确的调用链
+## 4. 正确的调用链
 
-### 3.1 用户点击 WiFi 列表项后的流程
+### 4.1 用户点击 WiFi 列表项后的流程
 
 ```
 WifiFragment.handleApClick()
@@ -136,7 +155,7 @@ bindProcessToNetwork(network)  // 绑定应用流量
 SpecifierConnectionCallback.onConnected()  // 通知 UI
 ```
 
-### 3.2 断开连接流程
+### 4.2 断开连接流程
 
 ```
 WifiFragment.handleApClick() (已连接状态点击)
@@ -151,19 +170,17 @@ SpecifierConnectionCallback.onLost()  // 通知 UI
 
 ---
 
-## 4. 开发注意事项
+## 5. 开发注意事项
 
-### 4.1 禁止的操作
+### 5.1 禁止的操作
 
 | 操作 | 原因 |
 |------|------|
 | ❌ 调用 `WifiConnector.connect()` | 使用废弃的 Suggestion API |
-| ❌ 调用 `Method2ActionWifiAddNetworks.connect()` | 会弹出系统对话框，干扰用户体验 |
-| ❌ 调用 `WifiAutoConnectService` | 无障碍服务与 Specifier 不兼容 |
 | ❌ 混用 `WifiConfiguration` API | Android 10+ 已废弃 |
 | ❌ 直接修改 `specifierConnectedSsid` | 应通过 `releaseSpecifierConnection()` 管理 |
 
-### 4.2 推荐的操作
+### 5.2 推荐的操作
 
 | 操作 | 说明 |
 |------|------|
@@ -172,22 +189,9 @@ SpecifierConnectionCallback.onLost()  // 通知 UI
 | ✅ 监听 `SpecifierConnectionCallback` | 获取连接状态变更 |
 | ✅ 检查 `isSystemWifiConnection` | 区分系统级和本地连接 |
 
-### 4.3 调试技巧
-
-```kotlin
-// 查看当前连接状态
-val (ssid, isSystem) = service.getSpecifierConnectionInfo()
-Log.d(TAG, "当前连接: $ssid, 系统级: $isSystem")
-
-// 检查系统 WiFi 状态（与 Specifier 独立）
-val systemSsid = getSystemConnectedSsid()  // WifiFragment:167
-```
-
 ---
 
-## 5. 代码清理状态
-
-### 5.1 已完成的清理
+## 6. 代码清理状态
 
 | 文件 | 操作 | 状态 |
 |------|------|------|
@@ -197,26 +201,6 @@ val systemSsid = getSystemConnectedSsid()  // WifiFragment:167
 | `ScanForegroundService.kt` | 统一使用 Specifier | ✅ 已完成 |
 | `AndroidManifest.xml` | 移除无障碍服务声明 | ✅ 已完成 |
 
-### 5.2 统一后的连接机制
-
-```kotlin
-// 手动连接（WifiFragment）
-initiateConnect() → service.connectWithSpecifier()
-
-// 自动漫游（ScanForegroundService）
-triggerRoamingConnection() → connectWithSpecifier()
-```
-
-两者现在使用完全相同的连接机制。
-
----
-
-## 6. 相关文档链接
-
-- `docs/PROJECT_DOCS.md` - 项目整体架构
-- `docs/http_frontend.md` - HTTP API 接口文档
-- `diagnostic/WiFiConnectionDiagnostic.kt` - WiFi 连接诊断工具
-
 ---
 
 ## 7. 版本历史
@@ -224,3 +208,4 @@ triggerRoamingConnection() → connectWithSpecifier()
 | 日期 | 变更 |
 |------|------|
 | 2026-04-02 | 创建本文档，整理 Specifier 实现细节和废弃模块 |
+| 2026-04-02 | 补充漫游密码过滤机制、系统对话框延迟行为说明 |
