@@ -54,11 +54,11 @@ class WifiConnector(private val context: Context, private val handler: Handler) 
         onFailed: (String) -> Unit
     ) {
         val config = android.net.wifi.WifiConfiguration().apply {
-            SSID = ""$ssid""
+            SSID = "\"$ssid\""
             if (isOpen) {
                 allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.NONE)
             } else {
-                preSharedKey = ""$password""
+                preSharedKey = "\"$password\""
                 allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.WPA_PSK)
             }
         }
