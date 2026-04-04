@@ -132,11 +132,17 @@ class WifiFragment : Fragment() {
     // ── 系统 WiFi 状态同步 ────────────────────────────────────────────────────
 
     private fun syncConnectedSsid() {
+        // 正在发起 Specifier 连接时，忽略系统 WiFi 广播，避免系统自动重连覆盖连接状态
+        if (connectingSsid != null) {
+            Log.d(TAG, "[syncConnectedSsid] 跳过：正在连接 $connectingSsid，忽略系统广播")
+            return
+        }
+
         val systemSsid = getSystemConnectedSsid()
         val service = (activity as? MainActivity)?.getScanService()
         val (specifierSsid, _) = service?.getSpecifierConnectionInfo() ?: Pair(null, false)
 
-        Log.d(TAG, "[syncConnectedSsid] systemSsid=$systemSsid, specifierSsid=$specifierSsid, connectingSsid=$connectingSsid")
+        Log.d(TAG, "[syncConnectedSsid] systemSsid=$systemSsid, specifierSsid=$specifierSsid")
 
         // 优先使用 Specifier 连接状态
         val effectiveSsid = specifierSsid ?: systemSsid
@@ -146,9 +152,6 @@ class WifiFragment : Fragment() {
         when {
             specifierSsid != null -> {
                 tvStatus.text = "状态: 已连接 ${if (specifierSsid == systemSsid) "[系统]" else "[本地]"} $specifierSsid"
-                if (connectingSsid == specifierSsid) {
-                    clearConnectingState()
-                }
             }
             systemSsid != null -> {
                 tvStatus.text = "状态: 已连接 [系统] $systemSsid"
@@ -239,6 +242,12 @@ class WifiFragment : Fragment() {
 
         connectingSsid = ssid
         connectingPassword = password
+
+        // 提前保存密码，避免系统弹窗被取消时 onConnected 未触发导致密码丢失
+        if (password.isNotEmpty()) {
+            PasswordStore.save(requireContext(), ssid, password)
+        }
+
         tvStatus.text = "状态: 正在发起连接..."
 
         val service = (activity as? MainActivity)?.getScanService()

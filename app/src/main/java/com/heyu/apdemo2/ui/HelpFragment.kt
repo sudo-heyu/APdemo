@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -38,45 +39,73 @@ class HelpFragment : Fragment() {
         }
     }
 
+    private val logHtmlStyle = """
+        body { font-family: monospace; font-size: 11px; color: #222; padding: 8px; line-height: 1.6; }
+        table { border-collapse: collapse; margin: 4px 0; font-size: 11px; }
+        th, td { border: 1px solid #999; padding: 3px 6px; text-align: center; white-space: nowrap; }
+        th { background: #e0e0e0; font-weight: bold; }
+        tr:nth-child(even) { background: #f5f5f5; }
+    """.trimIndent()
+
+    private fun logsToHtml(logText: String): String {
+        val body = if (logText.isBlank() || logText == "暂无日志") "暂无日志"
+                   else logText.replace("\n", "<br>")
+        return """<html><head><style>$logHtmlStyle</style></head>
+            <body><div id="log">$body</div>
+            <script>
+            var userScrolled = false;
+            function atBottom() {
+                return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 30);
+            }
+            window.addEventListener('scroll', function() {
+                userScrolled = !atBottom();
+            });
+            function append(html) {
+                var d = document.getElementById('log');
+                d.insertAdjacentHTML('beforeend', '<br>' + html);
+                if (!userScrolled) window.scrollTo(0, document.body.scrollHeight);
+            }
+            window.onload = function() { window.scrollTo(0, document.body.scrollHeight); };
+            </script></body></html>"""
+    }
+
+    private fun String.jsEscape(): String = this
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "")
+
     private fun showRoamingLog() {
         val ctx = requireContext()
         val logManager = RoamingLogManager.getInstance(ctx)
         val logs = logManager.getLogs()
 
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val scrollView = ScrollView(ctx)
-        val tv = TextView(ctx).apply {
-            text = if (logs.isEmpty()) "暂无日志" else logs
-            textSize = 12f
-            setTextColor(0xFF333333.toInt())
-            setLineSpacing(0f, 1.3f)
-            setPadding(pad, pad, pad, pad)
+        val webView = WebView(ctx).apply {
+            settings.javaScriptEnabled = true
+            loadDataWithBaseURL(null, logsToHtml(logs), "text/html", "UTF-8", null)
         }
-        scrollView.addView(tv)
 
         val listener = RoamingLogManager.OnLogListener { logLine ->
             activity?.runOnUiThread {
-                tv.append("\n$logLine")
-                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
+                val escaped = logLine.jsEscape()
+                webView.evaluateJavascript("append('$escaped')", null)
             }
         }
         logManager.addListener(listener)
 
         AlertDialog.Builder(ctx)
             .setTitle("漫游算法日志")
-            .setView(scrollView)
+            .setView(webView)
             .setPositiveButton("关闭", null)
             .setNeutralButton("清空") { _, _ ->
                 logManager.clearLogs()
-                tv.text = "日志已清空"
+                webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
             }
             .setOnDismissListener {
                 logManager.removeListener(listener)
+                webView.destroy()
             }
             .show()
-            .also {
-                scrollView.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
-            }
     }
 
     private fun showDetail(title: String, content: String) {

@@ -2,6 +2,8 @@ package com.heyu.apdemo2.roaming
 
 import android.content.Context
 import android.util.Log
+import ai.onnxruntime.OnnxMap
+import ai.onnxruntime.OnnxSequence
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -133,17 +135,19 @@ class ApRoamingModel(context: Context) : ApPairwisePredictor {
                 ((rawFeatures[i] - SCALER_MEAN[i]) / SCALER_SCALE[i]).toFloat()
             }
 
-            // 记录特征输入
+            // 记录特征输入（HTML 表格）
             val featureLog = StringBuilder()
-            featureLog.appendLine("【模型输入特征】${ssidA ?: "A"} vs ${ssidB ?: "B"}")
-            featureLog.appendLine("  原始值: RSSI_A=${rssiA}dBm(${String.format(Locale.US, "%.4f", ra)}), RSSI_B=${rssiB}dBm(${String.format(Locale.US, "%.4f", rb)}), " +
-                    "Score_A=${scoreA}(${String.format(Locale.US, "%.4f", sa)}), Score_B=${scoreB}(${String.format(Locale.US, "%.4f", sb)})")
-            featureLog.append("  特征向量: [")
+            featureLog.append("<span style='background:#5D4037;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold'>模型输入</span> ${ssidA ?: "A"} vs ${ssidB ?: "B"}")
+            featureLog.append("<table>")
+            featureLog.append("<tr><th>特征</th><th>原始值</th><th>标准化</th></tr>")
             for (i in 0 until NUM_FEATURES) {
-                featureLog.append("${FEATURE_NAMES[i]}=${String.format(Locale.US, "%.4f", features[i])}")
-                if (i < NUM_FEATURES - 1) featureLog.append(", ")
+                featureLog.append("<tr>")
+                featureLog.append("<td>${FEATURE_NAMES[i]}</td>")
+                featureLog.append("<td>${String.format(Locale.US, "%.4f", rawFeatures[i])}</td>")
+                featureLog.append("<td>${String.format(Locale.US, "%.4f", features[i])}</td>")
+                featureLog.append("</tr>")
             }
-            featureLog.append("]")
+            featureLog.append("</table>")
             logManager.d(featureLog.toString())
 
             // 创建输入张量
@@ -155,12 +159,15 @@ class ApRoamingModel(context: Context) : ApPairwisePredictor {
             inputTensor.use { tensor ->
                 val results = ortSession?.run(mapOf("features" to tensor))
                 results?.use { output ->
-                    // 获取输出概率
-                    val outputTensor = output[0] as? OnnxTensor
-                    val probabilities = outputTensor?.floatBuffer
-                    // 返回正类的概率（AP A 优于 AP B）
-                    val prob = probabilities?.get(0) ?: 0.5f
-                    logManager.d("【模型输出】prob(A>B)=${String.format(Locale.US, "%.4f", prob)}, prob(B>A)=${String.format(Locale.US, "%.4f", 1 - prob)}")
+                    // output[0] = label (int64)
+                    // output[1] = probabilities: OnnxSequence -> List<OnnxMap> -> Map<Long, Float>
+                    val onnxSeq = (output[1] as? OnnxSequence)?.getValue() as? List<*>
+                    val onnxMap = onnxSeq?.firstOrNull() as? OnnxMap
+                    @Suppress("UNCHECKED_CAST")
+                    val probMap = onnxMap?.getValue() as? Map<Long, Float>
+                    val prob = probMap?.get(1L) ?: 0.5f
+                    logManager.phase("模型输出", "#283593",
+                        "prob(A>B)=${String.format(Locale.US, "%.4f", prob)}, prob(B>A)=${String.format(Locale.US, "%.4f", 1 - prob)}")
                     return prob
                 }
             }

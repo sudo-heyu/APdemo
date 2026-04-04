@@ -20,7 +20,8 @@ class RoamingLogManager private constructor(context: Context) {
     companion object {
         private const val TAG = "[RoamingLog]"
         private const val LOG_FILE_NAME = "roaming_algorithm.log"
-        private const val MAX_LOG_SIZE = 1024 * 1024L // 1MB，超过则清空
+        private const val MAX_LINES = 500 // 内存最多保留行数
+        private const val TRIM_TO = 350   // 超限后裁剪到此行数（保留最新）
 
         @Volatile
         private var instance: RoamingLogManager? = null
@@ -35,14 +36,23 @@ class RoamingLogManager private constructor(context: Context) {
     }
 
     private val logFile = File(context.filesDir, LOG_FILE_NAME)
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    private val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val listeners = mutableListOf<OnLogListener>()
 
+    // 内存日志缓冲（有序，最新在末尾）
+    private val logLines = mutableListOf<String>()
+
     init {
-        // 确保日志文件存在
         if (!logFile.exists()) {
             logFile.createNewFile()
         }
+        // 启动时从文件加载最近日志
+        try {
+            if (logFile.exists()) {
+                val lines = logFile.readLines().filter { it.isNotBlank() }
+                logLines.addAll(lines.takeLast(MAX_LINES))
+            }
+        } catch (_: Exception) {}
     }
 
     fun addListener(listener: OnLogListener) {
@@ -58,7 +68,7 @@ class RoamingLogManager private constructor(context: Context) {
      */
     fun log(level: String, message: String) {
         val timestamp = dateFormat.format(Date())
-        val logLine = "[$timestamp] [$level] $message"
+        val logLine = "[$timestamp] $message"
 
         // 同时输出到Logcat
         when (level) {
@@ -69,14 +79,24 @@ class RoamingLogManager private constructor(context: Context) {
             else -> Log.d(TAG, message)
         }
 
+        // 追加到内存缓冲
+        synchronized(logLines) {
+            logLines.add(logLine)
+            if (logLines.size > MAX_LINES) {
+                val removeCount = logLines.size - TRIM_TO
+                logLines.subList(0, removeCount).clear()
+            }
+        }
+
         // 写入文件
         try {
-            if (logFile.length() > MAX_LOG_SIZE) {
-                logFile.writeText("")
-                val resetLine = "[$timestamp] [I] 日志文件超过1MB，已自动清空\n"
-                logFile.appendText(resetLine)
-            }
             logFile.appendText(logLine + "\n")
+            // 文件超限时重写为内存中的内容
+            if (logFile.length() > 512 * 1024L) {
+                synchronized(logLines) {
+                    logFile.writeText(logLines.joinToString("\n") + "\n")
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "写入日志失败: ${e.message}")
         }
@@ -92,18 +112,18 @@ class RoamingLogManager private constructor(context: Context) {
     fun w(message: String) = log("W", message)
     fun e(message: String) = log("E", message)
 
+    /** 带颜色的阶段标签，用于 WebView 渲染 */
+    fun phase(tag: String, color: String, message: String) {
+        log("I", "<span style='background:$color;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold'>$tag</span> $message")
+    }
+
     /**
-     * 获取所有日志内容
+     * 获取日志内容（正序，最新在末尾）
      */
     fun getLogs(): String {
-        return try {
-            if (logFile.exists()) {
-                logFile.readText()
-            } else {
-                "暂无日志"
-            }
-        } catch (e: Exception) {
-            "读取日志失败: ${e.message}"
+        return synchronized(logLines) {
+            if (logLines.isEmpty()) "暂无日志"
+            else logLines.joinToString("\n")
         }
     }
 
@@ -111,9 +131,9 @@ class RoamingLogManager private constructor(context: Context) {
      * 清空日志
      */
     fun clearLogs() {
+        synchronized(logLines) { logLines.clear() }
         try {
             logFile.writeText("")
-            i("日志已清空")
         } catch (e: Exception) {
             Log.e(TAG, "清空日志失败: ${e.message}")
         }

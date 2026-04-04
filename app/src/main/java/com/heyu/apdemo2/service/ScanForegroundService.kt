@@ -155,10 +155,9 @@ class ScanForegroundService : Service() {
                 pollInterval = intent.getLongExtra(EXTRA_POLL_INTERVAL, 10000L)
                 persistConfig()
                 Log.d(TAG, "收到配置: ip=$serverIp port=$serverPort scanInterval=${scanInterval}ms")
-                if (!isRunning) {
-                    acquireWakeLock()
-                    startScanLoop()
-                }
+                // 无论是否已在运行，都立即触发扫描+上报，确保打开APP后立刻同步后端
+                acquireWakeLock()
+                startScanLoop()
             }
             else -> {
                 // START_STICKY 重启：intent 为 null，从持久化存储恢复配置
@@ -271,18 +270,13 @@ class ScanForegroundService : Service() {
             override fun onSuccess(response: ScanResponse) {
                 handler.post {
                     if (!isRunning) return@post
-                    roamingLogManager.i("【轮询同步成功】更新 ${response.results?.size ?: 0} 个AP评分")
                     updateScoresFromResponse(response)
                 }
             }
             override fun onError(error: String) {
                 handler.post {
                     if (!isRunning) return@post
-                    roamingLogManager.e("【轮询同步失败】$error")
-                    if (autoRoamingEnabled) {
-                        roamingLogManager.i("【降级模式】轮询失败，使用现有评分执行漫游评估")
-                        evaluateAndTriggerRoaming()
-                    }
+                    if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                 }
             }
         })
@@ -310,11 +304,7 @@ class ScanForegroundService : Service() {
                 if (!isRunning) return@startScan
                 currentAccessPoints = accessPoints
                 callback?.onDataUpdate(accessPoints)
-                roamingLogManager.i("【扫描完成】发现 ${accessPoints.size} 个AP")
-                accessPoints.forEachIndexed { index, ap ->
-                    roamingLogManager.d("  [$index] ${ap.ssid} | RSSI: ${ap.rssi}dBm | 加密: ${if (ap.isSecured()) "是" else "否"}")
-                }
-                // 扫描完成后同步评分
+                roamingLogManager.i("扫描完成: ${accessPoints.size}个AP")
                 syncScoresAndEvaluate(accessPoints)
             },
             onError = { err ->
@@ -329,7 +319,6 @@ class ScanForegroundService : Service() {
     private fun syncScoresAndEvaluate(accessPoints: List<AccessPoint>) {
         val ip = serverIp
         if (ip == null || serverPort == -1) {
-            roamingLogManager.w("【服务器未配置】使用默认评分")
             if (autoRoamingEnabled) evaluateAndTriggerRoaming()
             scheduleNextScan("服务器未配置")
             return
@@ -340,7 +329,6 @@ class ScanForegroundService : Service() {
             override fun onSuccess(response: ScanResponse) {
                 handler.post {
                     if (!isRunning) return@post
-                    roamingLogManager.i("【同步成功】更新 ${response.results?.size ?: 0} 个AP评分")
                     updateScoresFromResponse(response)
                     scheduleNextScan("就绪")
                 }
@@ -348,11 +336,7 @@ class ScanForegroundService : Service() {
             override fun onError(error: String) {
                 handler.post {
                     if (!isRunning) return@post
-                    roamingLogManager.e("【同步失败】$error")
-                    if (autoRoamingEnabled) {
-                        roamingLogManager.i("【降级模式】使用默认评分执行漫游评估")
-                        evaluateAndTriggerRoaming()
-                    }
+                    if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                     scheduleNextScan("同步失败")
                 }
             }
@@ -391,12 +375,8 @@ class ScanForegroundService : Service() {
             }
         }
 
-        roamingLogManager.d("【评分更新】成功更新 $updatedCount 个AP的评分")
-
         if (autoRoamingEnabled) {
             evaluateAndTriggerRoaming()
-        } else {
-            roamingLogManager.i("【自动漫游已关闭】跳过漫游评估")
         }
     }
 
@@ -406,81 +386,40 @@ class ScanForegroundService : Service() {
     private fun evaluateAndTriggerRoaming() {
         val now = System.currentTimeMillis()
 
+        if (currentAccessPoints.isEmpty()) return
 
-
-        roamingLogManager.i("【漫游评估开始】时间: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(now))}")
-
-        if (currentAccessPoints.isEmpty()) {
-            roamingLogManager.w("【漫游评估】候选AP列表为空，跳过评估")
-    
-            return
-        }
-
-        // 过滤掉没有保存密码的加密AP（只保留开放网络 + 已存密码的加密网络）
+        // 过滤掉没有保存密码的加密AP
         val connectableAps = currentAccessPoints.filter { ap ->
-            if (!ap.isSecured()) {
-                true // 开放网络，可连接
-            } else {
-                val hasPassword = !PasswordStore.get(this, ap.ssid).isNullOrEmpty()
-                if (!hasPassword) {
-                    roamingLogManager.d("【密码过滤】排除 ${ap.ssid}（加密但未保存密码）")
-                }
-                hasPassword
-            }
+            !ap.isSecured() || !PasswordStore.get(this, ap.ssid).isNullOrEmpty()
         }
-
-        if (connectableAps.isEmpty()) {
-            roamingLogManager.w("【漫游评估】过滤后无可连接AP（均需密码但未保存）")
-    
-            return
-        }
-
-        roamingLogManager.i("【密码过滤】${currentAccessPoints.size} 个AP → ${connectableAps.size} 个可连接AP")
+        if (connectableAps.isEmpty()) return
 
         val currentAp = connectableAps.find { it.ssid == currentConnectedSsid }
-        roamingLogManager.i("【当前连接】${currentAp?.ssid ?: "无"}, RSSI: ${currentAp?.rssi ?: "N/A"}dBm, 评分: ${currentAp?.score ?: "N/A"}")
+        roamingLogManager.phase("开始评估", "#1565C0",
+            "当前: ${currentAp?.ssid ?: "无"} (${currentAp?.rssi ?: "--"}dBm), 可选: ${connectableAps.size}个")
 
-        roamingLogManager.d("【候选AP概览（可连接）】")
-        connectableAps.forEach { ap ->
-            val marker = if (ap.ssid == currentConnectedSsid) " ← 当前" else ""
-            roamingLogManager.d("  ${ap.ssid} | RSSI: ${ap.rssi}dBm | 评分: ${ap.score ?: "N/A"}$marker")
-        }
-
+        // ApSelectionManager 内部会输出 Borda + Pairwise 排名表
         val bestAp = apSelectionManager.selectBestAp(connectableAps, isGameMode = false)
-
         if (bestAp == null) {
-            roamingLogManager.i("【算法推荐】无法选出最佳AP")
-    
+            roamingLogManager.phase("评估结束", "#757575", "未找到可用AP")
             return
         }
 
-        roamingLogManager.i("【算法推荐】最佳AP: ${bestAp.ssid}, RSSI: ${bestAp.rssi}dBm, 评分: ${bestAp.score ?: "N/A"}")
-
         if (bestAp.ssid == currentConnectedSsid) {
-            roamingLogManager.i("【决策】当前AP已是最优，无需切换")
-    
+            roamingLogManager.phase("评估结束", "#4CAF50", "当前已最优 (${bestAp.ssid})，不切换")
             return
         }
 
         if (now - lastRoamingTime < ROAMING_COOLDOWN_MS) {
             val remaining = (ROAMING_COOLDOWN_MS - (now - lastRoamingTime)) / 1000
-            roamingLogManager.i("【决策】推荐切换到 ${bestAp.ssid}，但处于冷却期（剩余 ${remaining}s）")
-    
+            roamingLogManager.phase("评估结束", "#FF9800", "推荐 ${bestAp.ssid}，冷却中（${remaining}s）")
             return
         }
 
-        if (currentAp == null) {
-            roamingLogManager.i("【决策】当前无连接，连接最佳AP: ${bestAp.ssid}")
-            triggerRoamingConnection(bestAp)
-            lastRoamingTime = now
-    
-            return
-        }
-
-        roamingLogManager.i("【决策】执行漫游: ${currentAp.ssid}(${currentAp.rssi}dBm) → ${bestAp.ssid}(${bestAp.rssi}dBm)")
+        roamingLogManager.phase("触发切换", "#E65100",
+            "${currentAp?.ssid ?: "无"} → ${bestAp.ssid} (${bestAp.rssi}dBm)")
         triggerRoamingConnection(bestAp)
         lastRoamingTime = now
-
     }
 
     /**
@@ -505,11 +444,11 @@ class ScanForegroundService : Service() {
         connectWithSpecifier(targetAp.ssid, password, object : SpecifierConnectionCallback {
             override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
                 currentConnectedSsid = targetAp.ssid
-                roamingLogManager.i("【切换成功】已连接到 ${targetAp.ssid}")
+                roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → ${targetAp.ssid}")
                 callback?.onConnectionChanged(targetAp.ssid, true)
             }
             override fun onFailed(failedSsid: String, error: String) {
-                roamingLogManager.e("【切换失败】${targetAp.ssid}: $error")
+                roamingLogManager.phase("评估结束", "#D32F2F", "切换失败: ${targetAp.ssid} ($error)")
                 callback?.onConnectionChanged(null, false, error)
             }
             override fun onLost(lostSsid: String?) {
@@ -660,6 +599,9 @@ class ScanForegroundService : Service() {
      * @param password 密码（开放网络传空）
      * @param callback 连接状态回调
      */
+    // 主线程 Handler：用于 Specifier 回调的即时分发，避免排队到扫描线程
+    private val mainLooperHandler = Handler(android.os.Looper.getMainLooper())
+
     @RequiresApi(Build.VERSION_CODES.Q)
     fun connectWithSpecifier(ssid: String, password: String, callback: SpecifierConnectionCallback) {
         releaseSpecifierConnection()
@@ -678,41 +620,43 @@ class ScanForegroundService : Service() {
 
         specifierNetworkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                handler.post {
-                    connectivityManager.bindProcessToNetwork(network)
-                    specifierConnectedSsid = ssid
+                // 立即绑定网络并回调，不排队到扫描线程
+                connectivityManager.bindProcessToNetwork(network)
+                specifierConnectedSsid = ssid
+                isSystemWifiConnection = false
+                roamingLogManager.i("【Specifier连接成功】SSID: $ssid")
+                callback.onConnected(ssid, false)
+            }
 
-                    val caps = connectivityManager.getNetworkCapabilities(network)
-                    isSystemWifiConnection =
-                        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-
-                    roamingLogManager.i("【Specifier连接成功】SSID: $ssid, 类型: ${if (isSystemWifiConnection) "系统级" else "本地"}")
-                    callback.onConnected(ssid, isSystemWifiConnection)
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                val isSystem =
+                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                if (isSystem != isSystemWifiConnection) {
+                    isSystemWifiConnection = isSystem
+                    roamingLogManager.i("【连接类型更新】SSID: $ssid, 类型: ${if (isSystem) "系统级" else "本地"}")
+                    callback.onConnected(ssid, isSystem)
                 }
             }
 
             override fun onUnavailable() {
-                handler.post {
-                    roamingLogManager.w("【Specifier连接失败】SSID: $ssid")
-                    callback.onFailed(ssid, "连接失败或被用户取消")
-                }
+                roamingLogManager.w("【Specifier连接失败】SSID: $ssid")
+                callback.onFailed(ssid, "连接失败或被用户取消")
             }
 
             override fun onLost(network: Network) {
-                handler.post {
-                    connectivityManager.bindProcessToNetwork(null)
-                    val wasSsid = specifierConnectedSsid
-                    specifierConnectedSsid = null
-                    isSystemWifiConnection = false
-                    roamingLogManager.i("【Specifier连接断开】SSID: $wasSsid")
-                    callback.onLost(wasSsid)
-                }
+                connectivityManager.bindProcessToNetwork(null)
+                val wasSsid = specifierConnectedSsid
+                specifierConnectedSsid = null
+                isSystemWifiConnection = false
+                roamingLogManager.i("【Specifier连接断开】SSID: $wasSsid")
+                callback.onLost(wasSsid)
             }
         }
 
         try {
-            connectivityManager.requestNetwork(request, specifierNetworkCallback!!)
+            // 回调分发到主线程，避免被扫描/上传任务阻塞
+            connectivityManager.requestNetwork(request, specifierNetworkCallback!!, mainLooperHandler)
             roamingLogManager.i("【Specifier发起连接】SSID: $ssid")
         } catch (e: Exception) {
             roamingLogManager.e("【Specifier连接异常】${e.message}")
