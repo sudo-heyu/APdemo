@@ -380,6 +380,10 @@ class MainActivity : AppCompatActivity() {
             window.addEventListener('scroll', function() {
                 userScrolled = !atBottom();
             });
+            function scrollToBottom() {
+                userScrolled = false;
+                window.scrollTo(0, document.body.scrollHeight);
+            }
             function append(html) {
                 var d = document.getElementById('log');
                 d.insertAdjacentHTML('beforeend', '<br>' + html);
@@ -412,19 +416,25 @@ class MainActivity : AppCompatActivity() {
         }
         logManager.addListener(listener)
 
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("漫游算法日志")
             .setView(webView)
             .setPositiveButton("关闭", null)
-            .setNeutralButton("清空") { _, _ ->
-                logManager.clearLogs()
-                webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
-            }
+            .setNegativeButton("底部", null)
+            .setNeutralButton("清空", null)
             .setOnDismissListener {
                 logManager.removeListener(listener)
                 webView.destroy()
             }
             .show()
+
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+            webView.evaluateJavascript("scrollToBottom()", null)
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            logManager.clearLogs()
+            webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
+        }
     }
 
     // ── 配置对话框 ──────────────────────────────────────────────────────────

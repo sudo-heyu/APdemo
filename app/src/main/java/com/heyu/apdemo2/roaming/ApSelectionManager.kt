@@ -28,7 +28,7 @@ class ApSelectionManager(
     companion object {
         private const val TAG = "[ApSelectionManager]"
         private const val SCORE_MAX = 100f
-        private const val RSSI_CONNECTED_THRESHOLD = -80  // RSSI 低于此值视为不可连通
+        private const val RSSI_CONNECTED_THRESHOLD = -85  // RSSI 低于此值视为不可连通
 
         // 固定 RSSI 归一化范围，与训练数据分布一致
         // 训练数据中 RSSI 通常分布在 -85 到 -40 dBm 之间
@@ -130,8 +130,8 @@ class ApSelectionManager(
                 val scoreA = apScores[ssidA] ?: SCORE_DEFAULT
                 val scoreB = apScores[ssidB] ?: SCORE_DEFAULT
 
-                // 连通性判断：RSSI >= -80 dBm 则上下行均连通，否则均不连通
-                // 与训练数据 rssi!=0 => connected 的语义对齐，但增加了信号强度阈值
+                // 下行连通性：RSSI >= -80 dBm 视为连通
+                // 上行连通性：仅游戏模式（biz=1）有上行测量数据，视频模式训练时恒为 0
                 val connA = apA.rssi >= RSSI_CONNECTED_THRESHOLD
                 val connB = apB.rssi >= RSSI_CONNECTED_THRESHOLD
 
@@ -142,8 +142,8 @@ class ApSelectionManager(
                     scoreB = scoreB,
                     connDownA = connA,
                     connDownB = connB,
-                    connUpA = connA,
-                    connUpB = connB,
+                    connUpA = if (isGameMode) connA else false,
+                    connUpB = if (isGameMode) connB else false,
                     isGame = bizFlag,
                     rssiMin = rssiMin,
                     rssiMax = rssiMax,
