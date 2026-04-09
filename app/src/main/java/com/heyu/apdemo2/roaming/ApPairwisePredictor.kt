@@ -20,6 +20,8 @@ interface ApPairwisePredictor {
      * @param connUpA A 的上行是否可用
      * @param connUpB B 的上行是否可用
      * @param isGame 是否为游戏/上行业务
+     * @param rssiMin 当前候选集的 RSSI 最小值（用于归一化，与训练一致）
+     * @param rssiMax 当前候选集的 RSSI 最大值（用于归一化，与训练一致）
      * @param ssidA 用于日志（可选）
      * @param ssidB 用于日志（可选）
      * @return 概率 [0.0, 1.0]，>0.5 表示 A 更优
@@ -30,6 +32,8 @@ interface ApPairwisePredictor {
         connDownA: Boolean, connDownB: Boolean,
         connUpA: Boolean, connUpB: Boolean,
         isGame: Boolean = false,
+        rssiMin: Float = -120f,
+        rssiMax: Float = -30f,
         ssidA: String? = null,
         ssidB: String? = null
     ): Float

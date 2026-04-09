@@ -196,7 +196,7 @@ class ScanForegroundService : Service() {
         }
         pinnedPassword = password
         pinnedIsOpen = isOpen
-        connectWithSpecifier(ssid, password, object : SpecifierConnectionCallback {
+        connectWithSpecifier(ssid, password, isOpen, object : SpecifierConnectionCallback {
             override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
                 pinnedSsid = ssid
                 Log.d(TAG, "已连接并置顶: $ssid")
@@ -441,7 +441,7 @@ class ScanForegroundService : Service() {
 
         roamingLogManager.i("【开始切换】目标AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, 类型: ${if (isOpen) "开放" else "加密"}")
 
-        connectWithSpecifier(targetAp.ssid, password, object : SpecifierConnectionCallback {
+        connectWithSpecifier(targetAp.ssid, password, isOpen, object : SpecifierConnectionCallback {
             override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
                 currentConnectedSsid = targetAp.ssid
                 roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → ${targetAp.ssid}")
@@ -603,10 +603,9 @@ class ScanForegroundService : Service() {
     private val mainLooperHandler = Handler(android.os.Looper.getMainLooper())
 
     @RequiresApi(Build.VERSION_CODES.Q)
-    fun connectWithSpecifier(ssid: String, password: String, callback: SpecifierConnectionCallback) {
+    fun connectWithSpecifier(ssid: String, password: String, isOpen: Boolean, callback: SpecifierConnectionCallback) {
         releaseSpecifierConnection()
 
-        val isOpen = password.isEmpty()
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .apply { if (!isOpen) setWpa2Passphrase(password) }

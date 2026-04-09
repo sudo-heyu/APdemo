@@ -27,9 +27,6 @@ class ApRoamingModel(context: Context) : ApPairwisePredictor {
         private const val MODEL_NAME = "ap_roaming_model.onnx"
         private const val NUM_FEATURES = 13
 
-        // 归一化范围（模型内部参数，外部无需关心）
-        private const val RSSI_MIN = -120f
-        private const val RSSI_MAX = -30f
         private const val SCORE_MAX = 100f
 
         // 特征名称（用于日志）
@@ -38,15 +35,22 @@ class ApRoamingModel(context: Context) : ApPairwisePredictor {
             "prod_a", "prod_b", "a_conn_down", "b_conn_down", "a_conn_up", "b_conn_up", "biz"
         )
 
-        // StandardScaler 参数（来自 convert_to_onnx.py 输出）
-        // 需要根据实际模型输出更新这些值
+        // StandardScaler 参数（来自 convert_to_onnx.py 输出，2026-04-09 更新，三场景合并训练）
         private val SCALER_MEAN = doubleArrayOf(
-            0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.25, 0.25,
-            0.5, 0.5, 0.5, 0.5, 0.5
+            0.22762376135092258, 0.22762376135092266, 2.633337126242885e-19,  // rssi_a, rssi_b, rssi_diff
+            0.6414023968026435, 0.6414023968026435, -6.682809454818691e-19,   // score_a, score_b, score_diff
+            0.1460065424011401, 0.14600654240114008,                          // prod_a, prod_b
+            0.6192904346558469, 0.6192904346558469,                           // a_conn_down, b_conn_down
+            0.30432286984620616, 0.30432286984620616,                         // a_conn_up, b_conn_up
+            0.4946791710197041                                                 // biz
         )
         private val SCALER_SCALE = doubleArrayOf(
-            0.5, 0.5, 1.0, 0.5, 0.5, 1.0, 0.25, 0.25,
-            0.5, 0.5, 0.5, 0.5, 0.5
+            0.23154702157004162, 0.23154702157004162, 0.39632876942171,      // rssi_a, rssi_b, rssi_diff
+            0.22979533454765186, 0.22979533454765183, 0.33240536836753387,   // score_a, score_b, score_diff
+            0.16769044841382172, 0.16769044841382175,                        // prod_a, prod_b
+            0.4855613166219268, 0.485561316621927,                           // a_conn_down, b_conn_down
+            0.4601200503507484, 0.4601200503507484,                          // a_conn_up, b_conn_up
+            0.4999716879773919                                                // biz
         )
     }
 
@@ -91,11 +95,11 @@ class ApRoamingModel(context: Context) : ApPairwisePredictor {
         connDownA: Boolean, connDownB: Boolean,
         connUpA: Boolean, connUpB: Boolean,
         isGame: Boolean,
+        rssiMin: Float,
+        rssiMax: Float,
         ssidA: String?,
         ssidB: String?
     ): Float {
-        val rssiMin = RSSI_MIN
-        val rssiMax = RSSI_MAX
         val scoreMax = SCORE_MAX
         if (!isInitialized || ortSession == null) {
             Log.w(TAG, "模型未初始化，返回默认概率 0.5")

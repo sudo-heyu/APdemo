@@ -202,16 +202,63 @@ val connB = apB.rssi > -90
 
 使用 RSSI 阈值近似连接状态，非真实检测。
 
-### 4.3 冷却期逻辑
+### 4.3 StandardScaler 参数 ✅ 已修复 (2026-04-04)
+
+**原问题**: Android 端 `ApRoamingModel.kt` 中的 StandardScaler 参数（`SCALER_MEAN` 和 `SCALER_SCALE`）使用了占位值，而非训练时真实计算的值，导致特征标准化错误，模型预测不准确。
+
+**修复方案**: 运行 `convert_to_onnx.py` 获取真实参数并更新到 Android 代码。
+
+**真实参数**（来自 `model_combined.pkl`）：
+```kotlin
+SCALER_MEAN = [0.253, 0.253, 0.0, 0.657, 0.657, 0.0, 0.166, 0.166, 0.675, 0.675, 0.332, 0.332, 0.497]
+SCALER_SCALE = [0.235, 0.235, 0.392, 0.219, 0.219, 0.315, 0.173, 0.173, 0.469, 0.469, 0.471, 0.471, 0.500]
+```
+
+### 4.4 冷却期逻辑
 
 - 30秒冷却期对手动切换和自动切换统一生效
 - 冷却期内推荐切换只记录日志，无用户提示
 
-### 4.4 日志持久化
+### 4.5 日志持久化
 
 - 超过 1MB 自动清空，可能丢失关键历史
 - 无按日期分文件存储
 - 无日志导出功能
+
+### 4.6 本地 AP 性能缓存 ✅ 新增 (2026-04-05)
+
+**功能**: 纯本地缓存用户实际连接过的 AP 性能数据，用于辅助选网决策。
+
+**实现文件**:
+- `ApPerformanceCache.kt` - 性能缓存管理器
+- `ApPerformanceMonitor.kt` - 后台监控服务
+
+**采集指标**:
+- 下行速率 (KB/s) - 通过 `TrafficStats.getTotalRxBytes()` 差值计算
+- 上行速率 (KB/s) - 通过 `TrafficStats.getTotalTxBytes()` 差值计算
+- RSSI 信号强度
+- Ping 延迟 (ms)
+- 实际连接状态（是否有有效数据传输）
+
+**使用方式**:
+1. 选网时优先查询本地缓存
+2. 如果有 2+ AP 的历史数据，直接使用缓存评分排序
+3. 否则回退到 LightGBM 模型进行 Pairwise 比较
+
+**评分公式**:
+```
+综合评分 = 0.4 * 吞吐量评分 + 0.3 * 延迟评分 + 0.3 * RSSI评分
+```
+
+**限制**:
+- 只能采集已连接 AP 的性能
+- 无法获取未连接 AP 的流量/延迟
+- 首次使用时无历史数据
+
+**生命周期管理**:
+- 随 `MainActivity` 自动启动：`onStart()` → `ApPerformanceMonitor.start()`
+- 随 `MainActivity` 自动停止：`onStop()` → `ApPerformanceMonitor.stop()`
+- 需在 `AndroidManifest.xml` 中声明服务
 
 ---
 
@@ -232,6 +279,9 @@ val connB = apB.rssi > -90
 | 日志查看(主页) | `MainActivity.kt` | `showRoamingLog()` |
 | 日志查看(帮助) | `HelpFragment.kt` | `showRoamingLog()` |
 | Specifier连接 | `ScanForegroundService.kt` | `connectWithSpecifier()` |
+| 性能缓存 | `ApPerformanceCache.kt` | `sample()`, `getPerformanceSummary()` |
+| 性能监控服务 | `ApPerformanceMonitor.kt` | `startMonitoring()`, `sampleCurrentAp()` |
+| 监控服务生命周期 | `MainActivity.kt` | `startAndBindService()` 中启动, `onStop()` 中停止 |
 
 ---
 
@@ -243,3 +293,6 @@ val connB = apB.rssi > -90
 | 2026-04-02 | 更新：扫描简化为单次模式，漫游评估增加密码过滤和降级模式 |
 | 2026-04-02 | 更新：日志系统增加实时监听，入口移至主页面 toolbar |
 | 2026-04-02 | 更新：扫描间隔（默认35s）和后端请求间隔（默认10s）独立可配置 |
+| 2026-04-04 | 修复：StandardScaler 参数从占位值更新为真实训练值 |
+| 2026-04-05 | 新增：本地 AP 性能缓存系统 (ApPerformanceCache + ApPerformanceMonitor) |
+| 2026-04-05 | 集成：性能监控服务随 MainActivity 生命周期自动启停 |

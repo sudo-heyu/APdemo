@@ -257,7 +257,7 @@ class WifiFragment : Fragment() {
             return
         }
 
-        service.connectWithSpecifier(ssid, password, object : ScanForegroundService.SpecifierConnectionCallback {
+        service.connectWithSpecifier(ssid, password, isOpen, object : ScanForegroundService.SpecifierConnectionCallback {
             override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
                 mainHandler.post {
                     cancelConnectingTimeout()

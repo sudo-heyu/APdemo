@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CsvFileAttributes">
+    <option name="attributeMap">
+      <map>
+        <entry key="\app\src\main\java\com\heyu\apdemo2\docs\ap_selection\ap_data_test\ap_data_20260323\ap_0_down.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\app\src\main\java\com\heyu\apdemo2\docs\ap_selection\ap_data_test\ap_data_20260323\ap_1_up.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\app\src\main\java\com\heyu\apdemo2\docs\ap_selection\ap_data_test\ap_data_20260323\ap_5_down.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\app\src\main\java\com\heyu\apdemo2\docs\ap_selection\ap_data_test\ap_data_20260323\ap_5_up.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

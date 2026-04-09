@@ -32,6 +32,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.heyu.apdemo2.R
 import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
+import com.heyu.apdemo2.roaming.ApPerformanceMonitor
 
 class MainActivity : AppCompatActivity() {
 
@@ -143,6 +144,9 @@ class MainActivity : AppCompatActivity() {
             isBound = false
             Log.d(TAG, "已解绑服务")
         }
+        // 停止性能监控服务
+        ApPerformanceMonitor.stop(this)
+        Log.d(TAG, "性能监控服务已停止")
     }
 
     // ── Fragment 切换 ────────────────────────────────────────────────────────
@@ -216,6 +220,10 @@ class MainActivity : AppCompatActivity() {
         if (!isBound) {
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
+
+        // 启动性能监控服务
+        ApPerformanceMonitor.start(this)
+        Log.d(TAG, "性能监控服务已启动")
     }
 
     // ── 权限流程 ────────────────────────────────────────────────────────────

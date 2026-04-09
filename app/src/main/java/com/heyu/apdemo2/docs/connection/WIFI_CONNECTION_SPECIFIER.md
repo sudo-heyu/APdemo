@@ -209,3 +209,4 @@ SpecifierConnectionCallback.onLost()  // 通知 UI
 |------|------|
 | 2026-04-02 | 创建本文档，整理 Specifier 实现细节和废弃模块 |
 | 2026-04-02 | 补充漫游密码过滤机制、系统对话框延迟行为说明 |
+| 2026-04-05 | 修复：connectWithSpecifier() 添加 isOpen 参数，解决加密网络误判为开放网络的问题 |

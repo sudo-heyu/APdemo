@@ -10,19 +10,16 @@ private fun String.htmlEscape(): String = this
 /**
  * AP 选择管理器
  *
- * 实现基于 LightGBM 模型的漫游选网算法：
- * 1. Borda 排名过滤：根据 RSSI 和众包评分进行初步筛选
- * 2. Pairwise 比较：使用 ONNX 模型比较 AP 对
- * 3. 选出最佳 AP
+ * 实现与 Python 端 ml_lgb_test.py 一致的漫游选网算法：
+ * 1. 动态计算 RSSI 归一化范围（从候选集非零 RSSI 计算 min/max）
+ * 2. Pairwise 双向比较（permutations）：使用 ONNX 模型比较每对 AP 的两个方向
+ * 3. 按平均胜率 → 获胜次数 → 众包评分排序，选出最佳 AP
  */
 class ApSelectionManager(
     private val model: ApPairwisePredictor,
     private val logManager: RoamingLogManager
 ) {
 
-    /**
-     * 便捷构造：使用默认的 ONNX LightGBM 模型
-     */
     constructor(context: Context) : this(
         model = ApRoamingModel(context),
         logManager = RoamingLogManager.getInstance(context)
@@ -30,24 +27,23 @@ class ApSelectionManager(
 
     companion object {
         private const val TAG = "[ApSelectionManager]"
-        private const val BORDA_TOP_K = 5  // Borda 排名保留前 K 个
         private const val SCORE_MAX = 100f
+        private const val RSSI_CONNECTED_THRESHOLD = -80  // RSSI 低于此值视为不可连通
+
+        // 固定 RSSI 归一化范围，与训练数据分布一致
+        // 训练数据中 RSSI 通常分布在 -85 到 -40 dBm 之间
+        private const val RSSI_MIN = -85f
+        private const val RSSI_MAX = -40f
+        private const val SCORE_DEFAULT = 64f  // 训练集均值（归一化后 0.641×100），无服务器模式下使用
     }
 
-    // AP 众包评分映射（SSID -> 评分）
-    // 可以根据实际场景配置不同的评分
+    // AP 众包评分映射（SSID -> 评分），与 Python 端 ap_scores_video / ap_scores_game 对应
     private val apScores: MutableMap<String, Float> = mutableMapOf()
 
-    /**
-     * 设置 AP 的众包评分
-     */
     fun setApScore(ssid: String, score: Float) {
         apScores[ssid] = score.coerceIn(0f, SCORE_MAX)
     }
 
-    /**
-     * 批量设置 AP 评分
-     */
     fun setApScores(scores: Map<String, Float>) {
         apScores.clear()
         scores.forEach { (ssid, score) ->
@@ -56,11 +52,12 @@ class ApSelectionManager(
     }
 
     /**
-     * 从候选 AP 中选择最佳 AP（始终返回绝对最优，不做当前连接过滤）
+     * 从候选 AP 中选择最佳 AP
      *
-     * @param candidates 候选 AP 列表
-     * @param isGameMode 是否为游戏模式（上行业务）
-     * @return 算法选出的最佳 AP，由调用方决定是否切换
+     * 算法流程与 Python ml_lgb_test.py 的 select_best_per_position_generic 一致：
+     * 1. 从候选集动态计算 RSSI 归一化范围
+     * 2. 使用 permutations 进行双向 pairwise 比较
+     * 3. 按 prob_sums/matches → win_counts → ap_scores 排序
      */
     fun selectBestAp(
         candidates: List<AccessPoint>,
@@ -74,129 +71,96 @@ class ApSelectionManager(
         logManager.phase("AP选择", "#6A1B9A",
             "${candidates.size}个候选${if (isGameMode) ", 游戏模式" else ""}")
 
-        // 1. Borda 排名过滤
-        val filteredAps = filterByBorda(candidates, BORDA_TOP_K)
-
-        if (filteredAps.isEmpty()) {
-            logManager.w("Borda 过滤后无可用 AP")
-            return null
-        }
-
-        if (filteredAps.size == 1) {
-            val best = filteredAps.first()
+        if (candidates.size == 1) {
+            val best = candidates.first()
             logManager.phase("最佳AP", "#2E7D32",
                 "★ ${best.ssid} (${best.rssi}dBm) — 唯一候选")
             return best
         }
 
-        // 2. Pairwise 比较选出最佳
-        val bestAp = selectByPairwiseComparison(filteredAps, isGameMode)
+        // 动态计算 RSSI 归一化范围（与 Python calc_test_rssi_range 一致）
+        val (rssiMin, rssiMax) = calcRssiRange(candidates)
+        logManager.i("RSSI 归一化范围: min=${rssiMin}, max=${rssiMax}")
 
-        return bestAp
+        // Pairwise 比较选出最佳（与 Python select_best_per_position_generic 一致）
+        return selectByModelComparison(candidates, isGameMode, rssiMin, rssiMax)
     }
 
     /**
-     * Borda 排名过滤
-     * 根据 RSSI 和众包评分进行排名，综合得分高的 AP 获得更多点数
+     * 返回固定的 RSSI 归一化范围
+     * 与训练数据分布一致，避免候选集范围过窄导致归一化失真
      */
-    private fun filterByBorda(
-        candidates: List<AccessPoint>,
-        keepTopK: Int
-    ): List<AccessPoint> {
-        if (candidates.size <= keepTopK) return candidates
-
-        val n = candidates.size
-        val points = mutableMapOf<String, Int>()
-        val rssiRank = mutableMapOf<String, Int>()
-        val scoreRank = mutableMapOf<String, Int>()
-
-        candidates.sortedByDescending { it.rssi }.forEachIndexed { index, ap ->
-            points[ap.ssid] = (points[ap.ssid] ?: 0) + (n - index)
-            rssiRank[ap.ssid] = index + 1
-        }
-
-        candidates.sortedByDescending { apScores[it.ssid] ?: 0f }.forEachIndexed { index, ap ->
-            points[ap.ssid] = (points[ap.ssid] ?: 0) + (n - index)
-            scoreRank[ap.ssid] = index + 1
-        }
-
-        val sortedByBorda = candidates.sortedByDescending { points[it.ssid] ?: 0 }
-
-        // HTML 表格日志
-        val sb = StringBuilder()
-        sb.append("<table>")
-        sb.append("<tr><th>#</th><th>SSID</th><th>RSSI</th><th>R排名</th><th>S排名</th><th>Borda</th></tr>")
-        sortedByBorda.forEachIndexed { idx, ap ->
-            sb.append("<tr>")
-            sb.append("<td>${idx + 1}</td>")
-            sb.append("<td>${ap.ssid.htmlEscape()}</td>")
-            sb.append("<td>${ap.rssi}dBm</td>")
-            sb.append("<td>#${rssiRank[ap.ssid]}</td>")
-            sb.append("<td>#${scoreRank[ap.ssid]}</td>")
-            sb.append("<td>${points[ap.ssid]}</td>")
-            sb.append("</tr>")
-        }
-        sb.append("</table>")
-        logManager.phase("Borda筛选", "#00838F", "${candidates.size}个候选\n$sb")
-
-        val keepCount = if (sortedByBorda.size > 3) sortedByBorda.size - 3 else sortedByBorda.size
-        val result = sortedByBorda.take(keepCount.coerceAtLeast(keepTopK))
-        logManager.i("Borda: ${candidates.size}个 → 保留Top${result.size}")
-        return result
+    private fun calcRssiRange(candidates: List<AccessPoint>): Pair<Float, Float> {
+        return Pair(RSSI_MIN, RSSI_MAX)
     }
 
     /**
-     * 使用 Pairwise 比较选出最佳 AP
-     * 对每对 AP 使用模型预测比较概率，综合得分最高的胜出
+     * 使用 LightGBM 模型进行 Pairwise 比较
+     *
+     * 与 Python ml_lgb_test.py 的核心逻辑对齐：
+     * - 使用 permutations（双向比较），而非单向 + 1-prob
+     * - 使用众包评分 apScores 作为模型输入
+     * - 扫描可见的 AP 均视为已连接（connDown=true, connUp=true），
+     *   与训练数据中 rssi!=0 即为 connected 的语义一致
      */
-    private fun selectByPairwiseComparison(
+    private fun selectByModelComparison(
         candidates: List<AccessPoint>,
-        isGameMode: Boolean
+        isGameMode: Boolean,
+        rssiMin: Float,
+        rssiMax: Float
     ): AccessPoint? {
-        if (candidates.isEmpty()) return null
-        if (candidates.size == 1) return candidates.first()
-
         val apList = candidates.map { it.ssid }
         val apMap = candidates.associateBy { it.ssid }
 
         val probSums = mutableMapOf<String, Float>().apply { apList.forEach { put(it, 0f) } }
         val winCounts = mutableMapOf<String, Int>().apply { apList.forEach { put(it, 0) } }
 
-        // 每对只比一次（i < j），胜负互斥
+        val bizFlag = isGameMode
+
+        // permutations：双向比较，与 Python itertools.permutations 一致
         for (i in apList.indices) {
-            for (j in i + 1 until apList.size) {
+            for (j in apList.indices) {
+                if (i == j) continue
                 val ssidA = apList[i]
                 val ssidB = apList[j]
                 val apA = apMap[ssidA]!!
                 val apB = apMap[ssidB]!!
-                val connA = apA.rssi > -90
-                val connB = apB.rssi > -90
 
-                val probAWin = model.predict(
+                // 众包评分（与 Python ap_scores.get(ap_id, 0) 一致）
+                val scoreA = apScores[ssidA] ?: SCORE_DEFAULT
+                val scoreB = apScores[ssidB] ?: SCORE_DEFAULT
+
+                // 连通性判断：RSSI >= -80 dBm 则上下行均连通，否则均不连通
+                // 与训练数据 rssi!=0 => connected 的语义对齐，但增加了信号强度阈值
+                val connA = apA.rssi >= RSSI_CONNECTED_THRESHOLD
+                val connB = apB.rssi >= RSSI_CONNECTED_THRESHOLD
+
+                val prob = model.predict(
                     rssiA = apA.rssi.toFloat(),
-                    scoreA = apScores[ssidA] ?: 50f,
+                    scoreA = scoreA,
                     rssiB = apB.rssi.toFloat(),
-                    scoreB = apScores[ssidB] ?: 50f,
-                    connDownA = connA, connDownB = connB,
-                    connUpA = connA, connUpB = connB,
-                    isGame = isGameMode,
-                    ssidA = ssidA, ssidB = ssidB
+                    scoreB = scoreB,
+                    connDownA = connA,
+                    connDownB = connB,
+                    connUpA = connA,
+                    connUpB = connB,
+                    isGame = bizFlag,
+                    rssiMin = rssiMin,
+                    rssiMax = rssiMax,
+                    ssidA = ssidA,
+                    ssidB = ssidB
                 )
 
-                // A 得 prob，B 得 1-prob，胜负互斥
-                probSums[ssidA] = probSums[ssidA]!! + probAWin
-                probSums[ssidB] = probSums[ssidB]!! + (1f - probAWin)
-                if (probAWin >= 0.5f) {
+                probSums[ssidA] = probSums[ssidA]!! + prob
+                if (prob >= 0.5f) {
                     winCounts[ssidA] = winCounts[ssidA]!! + 1
-                } else {
-                    winCounts[ssidB] = winCounts[ssidB]!! + 1
                 }
             }
         }
 
         val matchesPerAp = apList.size - 1
 
-        // 排序: 1.平均胜率 2.获胜次数 3.众包评分
+        // 排序：与 Python max(key=lambda: (prob_sums/matches, win_counts, ap_scores)) 一致
         val ranked = apList.sortedWith(compareByDescending<String> { ssid ->
             probSums[ssid]!! / matchesPerAp
         }.thenByDescending { ssid ->
@@ -208,37 +172,37 @@ class ApSelectionManager(
         // HTML 表格日志
         val sb = StringBuilder()
         sb.append("<table>")
-        sb.append("<tr><th>#</th><th>SSID</th><th>胜率</th><th>胜负</th><th>RSSI</th><th></th></tr>")
+        sb.append("<tr><th>#</th><th>SSID</th><th>RSSI</th><th>连通</th><th>胜率</th><th>胜负</th><th>众包评分</th></tr>")
         ranked.forEachIndexed { idx, ssid ->
             val ap = apMap[ssid]!!
             val avgP = String.format(Locale.US, "%.2f", probSums[ssid]!! / matchesPerAp)
             val wins = winCounts[ssid]!!
             val losses = matchesPerAp - wins
-            val star = if (idx == 0) "★" else ""
+            val score = apScores[ssid]?.let { String.format(Locale.US, "%.0f", it) } ?: "0"
+            val conn = if (ap.rssi >= RSSI_CONNECTED_THRESHOLD) "✓" else "✗"
             sb.append("<tr>")
             sb.append("<td>${idx + 1}</td>")
             sb.append("<td>${ssid.htmlEscape()}</td>")
+            sb.append("<td>${ap.rssi}dBm</td>")
+            sb.append("<td>$conn</td>")
             sb.append("<td>$avgP</td>")
             sb.append("<td>${wins}W${losses}L</td>")
-            sb.append("<td>${ap.rssi}dBm</td>")
-            sb.append("<td>$star</td>")
+            sb.append("<td>$score</td>")
             sb.append("</tr>")
         }
         sb.append("</table>")
-        logManager.phase("Pairwise对战", "#AD1457", "${apList.size}个AP两两比较\n$sb")
+        logManager.phase("模型Pairwise", "#AD1457",
+            "${apList.size}个AP双向比较, RSSI范围[${rssiMin.toInt()},${rssiMax.toInt()}], 连通阈值${RSSI_CONNECTED_THRESHOLD}dBm\n$sb")
 
         val bestSsid = ranked.firstOrNull()
         val bestAp = bestSsid?.let { apMap[it] }
         if (bestAp != null) {
             logManager.phase("最佳AP", "#2E7D32",
-                "★ ${bestAp.ssid} (${bestAp.rssi}dBm)")
+                "★ ${bestAp.ssid} (${bestAp.rssi}dBm) 众包评分: ${apScores[bestAp.ssid] ?: "无"}")
         }
         return bestAp
     }
 
-    /**
-     * 释放资源
-     */
     fun close() {
         model.close()
     }

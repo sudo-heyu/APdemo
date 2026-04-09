@@ -42,6 +42,10 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
+        <service
+            android:name=".roaming.ApPerformanceMonitor"
+            android:exported="false" />
+
     </application>
 
 </manifest>
