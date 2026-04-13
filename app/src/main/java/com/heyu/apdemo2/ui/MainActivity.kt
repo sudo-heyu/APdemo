@@ -30,6 +30,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.heyu.apdemo2.R
+import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
 import com.heyu.apdemo2.roaming.ApPerformanceMonitor
@@ -351,6 +352,7 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_settings -> { showServerInputDialog(); true }
             R.id.action_roaming_log -> { showRoamingLog(); true }
+            R.id.action_export_log -> { exportRoamingLog(); true }
             R.id.action_auto_roaming -> {
                 // 点击事件已在 setupRoamingButton 中处理
                 true
@@ -435,6 +437,29 @@ class MainActivity : AppCompatActivity() {
             logManager.clearLogs()
             webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
         }
+    }
+
+    private fun exportRoamingLog() {
+        val (ip, port) = getServerAddress()
+        if (ip.isNullOrBlank() || port == -1) {
+            Toast.makeText(this, "请先配置服务器地址", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val logManager = RoamingLogManager.getInstance(this)
+        val logs = logManager.getLogs()
+        if (logs == "暂无日志") {
+            Toast.makeText(this, "暂无日志可导出", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在导出...", Toast.LENGTH_SHORT).show()
+        ApiService().uploadRoamingLog(ip, port, logs, object : ApiService.SimpleCallback {
+            override fun onSuccess() {
+                runOnUiThread { Toast.makeText(this@MainActivity, "日志导出成功", Toast.LENGTH_SHORT).show() }
+            }
+            override fun onError(error: String) {
+                runOnUiThread { Toast.makeText(this@MainActivity, "导出失败: $error", Toast.LENGTH_LONG).show() }
+            }
+        })
     }
 
     // ── 配置对话框 ──────────────────────────────────────────────────────────
