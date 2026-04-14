@@ -5,7 +5,8 @@
       "Bash(./gradlew assembleDebug)",
       "Bash(./gradlew compileDebugKotlin)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(sed:*)"
     ]
   }
 }

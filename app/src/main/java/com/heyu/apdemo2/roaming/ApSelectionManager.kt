@@ -26,14 +26,20 @@ class ApSelectionManager(
 
     companion object {
         private const val SCORE_MAX = 100f
-        private const val RSSI_CONNECTED_THRESHOLD = -85  // 低于此值视为不可连通
+        private const val RSSI_CONNECTED_THRESHOLD = -80  // 低于此值视为不可连通
         private const val SCORE_DEFAULT = 64f              // 无服务器时的默认评分（训练集均值）
     }
 
     private val apScores: MutableMap<String, Float> = mutableMapOf()
+    private val apReasons: MutableMap<String, String> = mutableMapOf()
 
     fun setApScore(ssid: String, score: Float) {
         apScores[ssid] = score.coerceIn(0f, SCORE_MAX)
+    }
+
+    fun setApScore(ssid: String, score: Float, reason: String?) {
+        apScores[ssid] = score.coerceIn(0f, SCORE_MAX)
+        if (reason != null) apReasons[ssid] = reason
     }
 
     fun setApScores(scores: Map<String, Float>) {
@@ -41,6 +47,8 @@ class ApSelectionManager(
     }
 
     fun getApScore(ssid: String): Float? = apScores[ssid]
+
+    fun getApReason(ssid: String): String? = apReasons[ssid]
 
     // ── ML 漫游 ───────────────────────────────────────────────────────────────
 
@@ -56,15 +64,21 @@ class ApSelectionManager(
             return null
         }
 
-        logManager.phase("ML选网", "#6A1B9A", "${candidates.size}个候选")
+        val scored = candidates.filter { apScores.containsKey(it.ssid) }
+        if (scored.isEmpty()) {
+            logManager.w("无评分AP，无法选择")
+            return null
+        }
 
-        if (candidates.size == 1) {
-            val best = candidates.first()
+        logManager.phase("ML选网", "#6A1B9A", "${scored.size}个候选（已过滤${candidates.size - scored.size}个无评分AP）")
+
+        if (scored.size == 1) {
+            val best = scored.first()
             logManager.phase("最佳AP", "#2E7D32", "★ ${best.ssid} (${best.rssi}dBm) — 唯一候选")
             return best
         }
 
-        return selectByModelComparison(candidates)
+        return selectByModelComparison(scored)
     }
 
     private fun selectByModelComparison(candidates: List<AccessPoint>): AccessPoint? {
@@ -162,16 +176,22 @@ class ApSelectionManager(
             return null
         }
 
-        logManager.phase("评分选网", "#0277BD", "${candidates.size}个候选")
+        val scored = candidates.filter { apScores.containsKey(it.ssid) }
+        if (scored.isEmpty()) {
+            logManager.w("无评分AP，无法选择")
+            return null
+        }
 
-        if (candidates.size == 1) {
-            val best = candidates.first()
+        logManager.phase("评分选网", "#0277BD", "${scored.size}个候选（已过滤${candidates.size - scored.size}个无评分AP）")
+
+        if (scored.size == 1) {
+            val best = scored.first()
             logManager.phase("最佳AP", "#2E7D32", "★ ${best.ssid} (${best.rssi}dBm) — 唯一候选")
             return best
         }
 
-        val sorted = candidates.sortedWith(
-            compareByDescending<AccessPoint> { apScores[it.ssid] ?: -1f }
+        val sorted = scored.sortedWith(
+            compareByDescending<AccessPoint> { apScores[it.ssid]!! }
                 .thenByDescending { it.rssi }
         )
 

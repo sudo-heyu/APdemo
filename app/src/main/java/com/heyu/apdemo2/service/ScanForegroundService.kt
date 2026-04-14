@@ -354,6 +354,7 @@ class ScanForegroundService : Service() {
             if (ap.score == null) {
                 apSelectionManager.getApScore(ap.ssid)?.let { cached ->
                     ap.score = cached.toInt()
+                    ap.reason = apSelectionManager.getApReason(ap.ssid)
                 }
             }
         }
@@ -372,7 +373,7 @@ class ScanForegroundService : Service() {
 
         currentAccessPoints.forEach { ap ->
             ap.score?.let { score ->
-                apSelectionManager.setApScore(ap.ssid, score.toFloat())
+                apSelectionManager.setApScore(ap.ssid, score.toFloat(), ap.reason)
             }
         }
 

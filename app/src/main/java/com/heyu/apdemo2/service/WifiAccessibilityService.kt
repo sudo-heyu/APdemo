@@ -32,12 +32,12 @@ class WifiAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "[WifiAccessibility]"
 
-        private const val MAX_RETRIES    = 20
-        private const val RETRY_MS       = 300L
-        private const val AUTO_CLEAR_MS  = 30_000L
-        private const val FIRST_TRY_MS   = 800L
-        private const val PWD_WAIT_MS    = 700L
-        private const val BACK_DELAY_MS  = 200L
+        private const val MAX_RETRIES    = 30
+        private const val RETRY_MS       = 150L
+        private const val AUTO_CLEAR_MS  = 15_000L
+        private const val FIRST_TRY_MS   = 400L
+        private const val PWD_WAIT_MS    = 400L
+        private const val BACK_DELAY_MS  = 100L
 
         @Volatile private var instance: WifiAccessibilityService? = null
         fun getInstance(): WifiAccessibilityService? = instance
@@ -160,7 +160,22 @@ class WifiAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (targetSsid == null && !ssidClicked) return
-        if (ssidClicked) return   // 已点击 SSID，后续由 handler 延迟任务处理
+        if (ssidClicked) return
+        // 7acb53735c1d8bd570b951fbFf0c907f514d7b495f85 FIRST_TRY_MS
+        if (targetSsid != null && retryRunnable == null) {
+            if (tryClickSsid(targetSsid!!)) {
+                Log.i(TAG, "5df270b951fb SSID: ${targetSsid}")
+                ssidClicked = true
+                targetSsid = null
+                retryRunnable = null
+                cancelClearTimer()
+                val pwd = targetPassword
+                if (!pwd.isNullOrEmpty()) {
+                    handler.postDelayed({ handlePasswordPhase(pwd) }, PWD_WAIT_MS)
+                }
+                return
+            }
+        }
         scheduleRetry()
     }
 
@@ -316,11 +331,9 @@ class WifiAccessibilityService : AccessibilityService() {
                         val ssid   = connected
                         val fromBg = openedByService
                         resetState()
-                        // 确认连接成功后才导航返回，避免未连上就跳走
-                        handler.postDelayed({
-                            if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
-                            cb?.onConnected(ssid)
-                        }, BACK_DELAY_MS)
+                        // 立即返回，不额外等待
+                        if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
+                        cb?.onConnected(ssid)
                     }
                 }
             }
