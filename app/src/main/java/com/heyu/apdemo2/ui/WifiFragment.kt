@@ -129,6 +129,16 @@ class WifiFragment : Fragment() {
             }
         }
 
+        // 用户从 WiFi 设置页手动返回但未连上目标网络：静默清除连接中状态
+        if (connectingSsid != null && !pendingA11yRetry) {
+            val systemSsid = getSystemConnectedSsid()
+            if (systemSsid != connectingSsid) {
+                Log.d(TAG, "用户手动返回，未连接到目标 $connectingSsid，清除状态")
+                clearConnectingState()
+                tvStatus.text = "状态: 未连接"
+            }
+        }
+
         if (::adapter.isInitialized && connectingSsid == null) syncConnectedSsid()
     }
 

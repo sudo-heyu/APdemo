@@ -1,6 +1,7 @@
 package com.heyu.apdemo2.service
 
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -36,7 +37,7 @@ class WifiAccessibilityService : AccessibilityService() {
         private const val AUTO_CLEAR_MS  = 30_000L
         private const val FIRST_TRY_MS   = 800L
         private const val PWD_WAIT_MS    = 700L
-        private const val BACK_DELAY_MS  = 800L
+        private const val BACK_DELAY_MS  = 200L
 
         @Volatile private var instance: WifiAccessibilityService? = null
         fun getInstance(): WifiAccessibilityService? = instance
@@ -183,9 +184,8 @@ class WifiAccessibilityService : AccessibilityService() {
                     val pwd = targetPassword
                     if (!pwd.isNullOrEmpty()) {
                         handler.postDelayed({ handlePasswordPhase(pwd) }, PWD_WAIT_MS)
-                    } else {
-                        scheduleFinish(null)   // 开放网络，等广播确认
                     }
+                    // 开放/已保存网络：不主动导航，等 WiFi 广播确认后再返回
                 } else if (retryCount < MAX_RETRIES) {
                     retryCount++
                     handler.postDelayed(this, RETRY_MS)
@@ -202,11 +202,11 @@ class WifiAccessibilityService : AccessibilityService() {
         val delay = if (retryCount == 0) FIRST_TRY_MS else RETRY_MS
         handler.postDelayed(retryRunnable!!, delay)
 
-        // 超时保护：30s 后强制清理
+        // 超时保护：30s 后清理内部状态 + 回调失败，但不导航（用户仍留在 WiFi 设置页）
         if (clearRunnable == null) {
             clearRunnable = Runnable {
-                Log.w(TAG, "自动超时清理")
-                val ssid = targetSsid ?: return@Runnable
+                Log.w(TAG, "自动超时清理（不导航，由用户自行返回）")
+                val ssid = targetSsid ?: if (ssidClicked) "unknown" else return@Runnable
                 val cb   = connectionCallback
                 resetState()
                 cb?.onFailed(ssid, "连接超时")
@@ -264,37 +264,33 @@ class WifiAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "密码框未出现（网络已保存），等待广播确认")
             }
         }
-        scheduleFinish(null)
-    }
-
-    // ── 阶段三：返回 App ──────────────────────────────────────────────────────
-
-    /**
-     * 延迟执行返回操作。
-     * WiFi 连接结果由广播接收器负责回调，此处只负责导航。
-     */
-    private fun scheduleFinish(successSsid: String?) {
-        val fromBg = openedByService
-        handler.postDelayed({
-            if (fromBg) {
-                returnToApp()
-            } else {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-            }
-        }, BACK_DELAY_MS)
+        // 填写密码并点击连接后，不主动导航，等 WiFi 广播确认连接成功后再返回
     }
 
     /**
-     * 直接拉起 App，避免盲按 BACK 导致的不确定跳转。
+     * 把 App 现有任务拉回前台，不创建新 Activity、不破坏返回栈。
+     * 优先用 AppTask.moveToFront()（精确），失败时降级为 LaunchIntent。
      * 仅用于后台（漫游）场景，手动场景直接 BACK 即可。
      */
     private fun returnToApp() {
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val task = am.appTasks.firstOrNull()
+            if (task != null) {
+                task.moveToFront()
+                Log.i(TAG, "已通过 moveToFront 返回 App")
+                return
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "moveToFront 失败: ${e.message}")
+        }
+        // 降级：通过 LaunchIntent 拉起（FLAG_SINGLE_TOP 保证不重建已有实例）
         try {
             val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             } ?: return
             startActivity(intent)
-            Log.i(TAG, "已返回 App")
+            Log.i(TAG, "已通过 LaunchIntent 返回 App")
         } catch (e: Exception) {
             Log.w(TAG, "返回 App 失败: ${e.message}")
         }
@@ -315,11 +311,16 @@ class WifiAccessibilityService : AccessibilityService() {
                     val target = targetSsid   // 注意：此时 targetSsid 可能已为 null（ssidClicked 阶段清空）
                     // ssidClicked 为 true 时说明我们已操作，且还未被其他连接覆盖
                     if (ssidClicked && (target == null || target == connected)) {
-                        Log.i(TAG, "广播确认连接成功: $connected")
-                        val cb = connectionCallback
-                        val ssid = connected
+                        Log.i(TAG, "广播确认连接成功: $connected，准备返回 App")
+                        val cb     = connectionCallback
+                        val ssid   = connected
+                        val fromBg = openedByService
                         resetState()
-                        cb?.onConnected(ssid)
+                        // 确认连接成功后才导航返回，避免未连上就跳走
+                        handler.postDelayed({
+                            if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
+                            cb?.onConnected(ssid)
+                        }, BACK_DELAY_MS)
                     }
                 }
             }
