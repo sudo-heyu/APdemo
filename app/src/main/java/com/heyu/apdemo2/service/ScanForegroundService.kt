@@ -77,8 +77,6 @@ class ScanForegroundService : Service() {
         private set
     var roamingMode: RoamingMode = RoamingMode.ML
         private set
-    private var lastRoamingTime: Long = 0
-    private val ROAMING_COOLDOWN_MS = 30000L
 
     var currentAccessPoints: List<AccessPoint> = emptyList()
         private set
@@ -86,6 +84,9 @@ class ScanForegroundService : Service() {
         private set
     var currentConnectedSsid: String? = null
         private set
+
+    /** 用户正在手动连接时为 true，此时跳过自动漫游 */
+    private var isUserConnecting: Boolean = false
 
     companion object {
         private const val TAG = "[SCAN_SERVICE]"
@@ -175,10 +176,12 @@ class ScanForegroundService : Service() {
     fun connectToNetwork(ssid: String, isOpen: Boolean, password: String) {
         pinnedPassword = password
         pinnedIsOpen = isOpen
+        isUserConnecting = true  // 标记用户正在连接
 
         val a11y = WifiAccessibilityService.getInstance()
         if (a11y == null) {
             roamingLogManager.w("【连接失败】无障碍服务未启用，请在系统设置中开启")
+            isUserConnecting = false
             callback?.onConnectionChanged(null, false, "请先在系统设置中启用无障碍服务")
             return
         }
@@ -187,12 +190,14 @@ class ScanForegroundService : Service() {
         roamingLogManager.i("【连接】准备无障碍连接（等待 Fragment 打开 WiFi 设置）: $ssid")
         a11y.prepareManualConnect(ssid, password, isOpen, object : WifiAccessibilityService.ConnectionCallback {
             override fun onConnected(connectedSsid: String) {
+                isUserConnecting = false  // 清除标记
                 pinnedSsid = connectedSsid
                 currentConnectedSsid = connectedSsid
                 Log.d(TAG, "无障碍服务连接成功: $connectedSsid")
                 callback?.onConnectionChanged(connectedSsid, true)
             }
             override fun onFailed(failedSsid: String, reason: String) {
+                isUserConnecting = false  // 清除标记
                 Log.w(TAG, "无障碍服务连接失败: $reason")
                 if (pinnedSsid == ssid) pinnedSsid = null
                 callback?.onConnectionChanged(null, false, reason)
@@ -206,6 +211,7 @@ class ScanForegroundService : Service() {
      */
     fun disconnectPinned() {
         WifiAccessibilityService.getInstance()?.cancel()
+        isUserConnecting = false
         pinnedSsid = null
         currentConnectedSsid = null
         callback?.onConnectionChanged(null, false)
@@ -386,7 +392,11 @@ class ScanForegroundService : Service() {
      * 评估并触发漫游切换
      */
     private fun evaluateAndTriggerRoaming() {
-        val now = System.currentTimeMillis()
+        // 用户正在手动连接时跳过漫游
+        if (isUserConnecting) {
+            roamingLogManager.phase("漫游跳过", "#FF9800", "用户正在手动连接，等待下一次评估")
+            return
+        }
 
         if (currentAccessPoints.isEmpty()) return
 
@@ -414,16 +424,9 @@ class ScanForegroundService : Service() {
             return
         }
 
-        if (now - lastRoamingTime < ROAMING_COOLDOWN_MS) {
-            val remaining = (ROAMING_COOLDOWN_MS - (now - lastRoamingTime)) / 1000
-            roamingLogManager.phase("评估结束", "#FF9800", "推荐 ${bestAp.ssid}，冷却中（${remaining}s）")
-            return
-        }
-
         roamingLogManager.phase("触发切换", "#E65100",
             "${currentAp?.ssid ?: "无"} → ${bestAp.ssid} (${bestAp.rssi}dBm)")
         triggerRoamingConnection(bestAp)
-        lastRoamingTime = now
     }
 
     /**
