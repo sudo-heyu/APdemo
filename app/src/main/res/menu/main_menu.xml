@@ -19,6 +19,10 @@
         android:title="服务器设置"
         app:showAsAction="always" />
     <item
+        android:id="@+id/action_request_scores"
+        android:title="请求评分"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_export_log"
         android:title="导出日志"
         app:showAsAction="never" />

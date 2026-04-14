@@ -25,6 +25,7 @@ import com.heyu.apdemo2.model.ScanResponse
 import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.roaming.ApSelectionManager
 import com.heyu.apdemo2.roaming.RoamingLogManager
+import com.heyu.apdemo2.roaming.RoamingMode
 import com.heyu.apdemo2.scanner.WifiScanner
 import com.heyu.apdemo2.ui.MainActivity
 
@@ -56,7 +57,7 @@ class ScanForegroundService : Service() {
     private var pinnedPassword: String = ""
     private var pinnedIsOpen: Boolean = false
 
-    // 独立后台线程：所有调度、扫描回调、轮询都在这个线程，与主线程完全解耦
+    // 独立后台线程：所有调度、扫描回调都在这个线程，与主线程完全解耦
     private val handlerThread = HandlerThread("ScanServiceThread")
     private lateinit var handler: Handler
 
@@ -64,8 +65,6 @@ class ScanForegroundService : Service() {
     private lateinit var wakeLock: PowerManager.WakeLock
 
     var scanInterval: Long = 35000L
-        private set
-    var pollInterval: Long = 10000L
         private set
     var serverIp: String? = null
         private set
@@ -75,6 +74,8 @@ class ScanForegroundService : Service() {
     var isRunning = false
         private set
     var autoRoamingEnabled: Boolean = false
+        private set
+    var roamingMode: RoamingMode = RoamingMode.ML
         private set
     private var lastRoamingTime: Long = 0
     private val ROAMING_COOLDOWN_MS = 30000L
@@ -93,7 +94,6 @@ class ScanForegroundService : Service() {
         const val EXTRA_IP = "server_ip"
         const val EXTRA_PORT = "server_port"
         const val EXTRA_SCAN_INTERVAL = "scan_interval"
-        const val EXTRA_POLL_INTERVAL = "poll_interval"
         // AlarmManager 唤醒下一轮扫描的 Action
         const val ACTION_NEXT_CYCLE = "com.heyu.apdemo2.ACTION_NEXT_CYCLE"
         // SharedPreferences 与 MainActivity 共用同一个文件
@@ -137,7 +137,6 @@ class ScanForegroundService : Service() {
                 serverIp   = intent.getStringExtra(EXTRA_IP)
                 serverPort = intent.getIntExtra(EXTRA_PORT, -1)
                 scanInterval = intent.getLongExtra(EXTRA_SCAN_INTERVAL, 35000L)
-                pollInterval = intent.getLongExtra(EXTRA_POLL_INTERVAL, 10000L)
                 persistConfig()
                 Log.d(TAG, "收到配置: ip=$serverIp port=$serverPort scanInterval=${scanInterval}ms")
                 // 无论是否已在运行，都立即触发扫描+上报，确保打开APP后立刻同步后端
@@ -212,11 +211,10 @@ class ScanForegroundService : Service() {
         callback?.onConnectionChanged(null, false)
     }
 
-    fun updateConfig(ip: String, port: Int, scanInt: Long, pollInt: Long) {
+    fun updateConfig(ip: String, port: Int, scanInt: Long) {
         serverIp = ip
         serverPort = port
         scanInterval = scanInt
-        pollInterval = pollInt
         persistConfig()
         startScanLoop()
     }
@@ -228,7 +226,6 @@ class ScanForegroundService : Service() {
             .putString("server_ip", serverIp)
             .putInt("server_port", serverPort)
             .putLong("scan_interval", scanInterval)
-            .putLong("poll_interval", pollInterval)
             .apply()
     }
 
@@ -237,34 +234,38 @@ class ScanForegroundService : Service() {
         serverIp     = prefs.getString("server_ip", null)
         serverPort   = prefs.getInt("server_port", -1)
         scanInterval = prefs.getLong("scan_interval", 35000L)
-        pollInterval = prefs.getLong("poll_interval", 10000L)
     }
 
-    // ── 轮询后端评分 ──────────────────────────────────────────────────────────
+    // ── 用户主动请求评分 ──────────────────────────────────────────────────────────
 
-    private val pollRunnable = object : Runnable {
-        override fun run() {
-            if (!isRunning) return
-            queryScoresOnly()
-            handler.postDelayed(this, pollInterval)
-        }
+    fun requestScores() {
+        handler.post { queryScoresOnly() }
     }
 
     private fun queryScoresOnly() {
         val ip = serverIp
-        if (ip == null || serverPort == -1) return
-        if (currentAccessPoints.isEmpty()) return
+        if (ip == null || serverPort == -1) {
+            Log.w(TAG, "请求评分跳过: 服务器未配置 (ip=$ip, port=$serverPort)")
+            callback?.onStatusUpdate("评分失败: 服务器未配置")
+            return
+        }
+        if (currentAccessPoints.isEmpty()) {
+            Log.w(TAG, "请求评分跳过: 无扫描数据")
+            callback?.onStatusUpdate("评分失败: 暂无扫描数据")
+            return
+        }
 
+        Log.d(TAG, "请求评分: ip=$ip port=$serverPort AP数=${currentAccessPoints.size}")
         apiService.uploadScanResults(ip, serverPort, currentAccessPoints, object : ApiService.BatchCallback {
             override fun onSuccess(response: ScanResponse) {
                 handler.post {
-                    if (!isRunning) return@post
                     updateScoresFromResponse(response)
                 }
             }
             override fun onError(error: String) {
                 handler.post {
-                    if (!isRunning) return@post
+                    Log.e(TAG, "请求评分失败: $error")
+                    callback?.onStatusUpdate("评分失败: $error")
                     if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                 }
             }
@@ -294,7 +295,8 @@ class ScanForegroundService : Service() {
                 currentAccessPoints = accessPoints
                 callback?.onDataUpdate(accessPoints)
                 roamingLogManager.i("扫描完成: ${accessPoints.size}个AP")
-                syncScoresAndEvaluate(accessPoints)
+                if (autoRoamingEnabled) evaluateAndTriggerRoaming()
+                scheduleNextScan("就绪")
             },
             onError = { err ->
                 if (!isRunning) return@startScan
@@ -336,11 +338,7 @@ class ScanForegroundService : Service() {
         if (!isRunning) return
         val msg = "$status (${scanInterval / 1000}s 后扫描)"
         updateStatus(msg)
-        Log.d(TAG, ">>> 下次扫描在 ${scanInterval / 1000}s 后, 轮询间隔 ${pollInterval / 1000}s")
-
-        // 启动轮询（在两次扫描之间定期向后端请求评分更新）
-        handler.removeCallbacks(pollRunnable)
-        handler.postDelayed(pollRunnable, pollInterval)
+        Log.d(TAG, ">>> 下次扫描在 ${scanInterval / 1000}s 后")
 
         // AlarmManager 确保 Doze 期间也能唤醒
         scheduleNextCycleAlarm(scanInterval)
@@ -387,8 +385,10 @@ class ScanForegroundService : Service() {
         roamingLogManager.phase("开始评估", "#1565C0",
             "当前: ${currentAp?.ssid ?: "无"} (${currentAp?.rssi ?: "--"}dBm), 可选: ${connectableAps.size}个")
 
-        // ApSelectionManager 内部会输出 Borda + Pairwise 排名表
-        val bestAp = apSelectionManager.selectBestAp(connectableAps, isGameMode = false)
+        val bestAp = when (roamingMode) {
+            RoamingMode.ML    -> apSelectionManager.selectBestAp(connectableAps)
+            RoamingMode.SCORE -> apSelectionManager.selectBestApByScore(connectableAps)
+        }
         if (bestAp == null) {
             roamingLogManager.phase("评估结束", "#757575", "未找到可用AP")
             return
@@ -448,15 +448,14 @@ class ScanForegroundService : Service() {
         })
     }
 
-    /**
-     * 设置自动漫游开关
-     */
     fun setAutoRoamingEnabled(enabled: Boolean) {
         autoRoamingEnabled = enabled
-
-
         roamingLogManager.i("【自动漫游】状态: ${if (enabled) "已开启" else "已关闭"}")
+    }
 
+    fun setRoamingMode(mode: RoamingMode) {
+        roamingMode = mode
+        roamingLogManager.i("【漫游模式】已切换: ${if (mode == RoamingMode.ML) "ML模型" else "众包评分"}")
     }
 
     /**

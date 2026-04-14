@@ -13,9 +13,34 @@
 | 组件 | 文件路径 | 职责 |
 |------|----------|------|
 | `ApSelectionManager` | `roaming/ApSelectionManager.kt` | 漫游选网主逻辑，Borda排名+Pairwise比较 |
-| `ApRoamingModel` | `roaming/ApRoamingModel.kt` | ONNX模型推理，加载LightGBM模型 |
+| `ApRoamingModel` | `roaming/ApRoamingModel.kt` | ONNX模型推理，加载LightGBM模型（Video Only版本） |
 | `ApPairwisePredictor` | `roaming/ApPairwisePredictor.kt` | 预测器接口，解耦模型实现 |
 | `RoamingLogManager` | `roaming/RoamingLogManager.kt` | 漫游算法执行日志管理（含实时监听） |
+
+### 1.2 模型特征（Video Only 版本）
+
+**模型文件**: `assets/ap_roaming_model_video.onnx`
+
+**特征维度**: 10 维（从 13 维简化，移除 biz_type 等通用业务特征）
+
+| 序号 | 特征名 | 说明 | 归一化方式 |
+|------|--------|------|-----------|
+| 0 | `rssi_a` | AP A 的 RSSI 值 | `(rssi - (-90)) / 60` → [0, 1] |
+| 1 | `rssi_b` | AP B 的 RSSI 值 | `(rssi - (-90)) / 60` → [0, 1] |
+| 2 | `rssi_diff` | RSSI 差值 | `rssi_a - rssi_b` |
+| 3 | `score_a` | AP A 众包评分 | `score / 100` → [0, 1] |
+| 4 | `score_b` | AP B 众包评分 | `score / 100` → [0, 1] |
+| 5 | `score_diff` | 评分差值 | `score_a - score_b` |
+| 6 | `prod_a` | AP A 综合特征 | `rssi_a * score_a` |
+| 7 | `prod_b` | AP B 综合特征 | `rssi_b * score_b` |
+| 8 | `a_conn` | AP A 连接状态 | 0 或 1 |
+| 9 | `b_conn` | AP B 连接状态 | 0 或 1 |
+
+**标准化参数**: 使用训练时计算的 `SCALER_MEAN` 和 `SCALER_SCALE` 进行 StandardScaler 变换
+
+**转换工具**: `docs/new_ap_selection/convert_to_onnx.py` 生成 ONNX 并打印标准化参数
+
+**Python 推理脚本**: `docs/new_ap_selection/infer.py` 支持批量 CSV 推理
 
 ### 1.2 算法流程
 
@@ -202,17 +227,30 @@ val connB = apB.rssi > -90
 
 使用 RSSI 阈值近似连接状态，非真实检测。
 
-### 4.3 StandardScaler 参数 ✅ 已修复 (2026-04-04)
+### 4.3 StandardScaler 参数 ✅ 已修复 (2026-04-14)
 
 **原问题**: Android 端 `ApRoamingModel.kt` 中的 StandardScaler 参数（`SCALER_MEAN` 和 `SCALER_SCALE`）使用了占位值，而非训练时真实计算的值，导致特征标准化错误，模型预测不准确。
 
-**修复方案**: 运行 `convert_to_onnx.py` 获取真实参数并更新到 Android 代码。
+**修复方案**: 运行 `docs/new_ap_selection/convert_to_onnx.py` 获取真实参数并更新到 Android 代码。
 
-**真实参数**（来自 `model_combined.pkl`）：
+**Video Only 模型参数**（10维特征）：
 ```kotlin
-SCALER_MEAN = [0.253, 0.253, 0.0, 0.657, 0.657, 0.0, 0.166, 0.166, 0.675, 0.675, 0.332, 0.332, 0.497]
-SCALER_SCALE = [0.235, 0.235, 0.392, 0.219, 0.219, 0.315, 0.173, 0.173, 0.469, 0.469, 0.471, 0.471, 0.500]
+// 特征顺序: ['rssi_a', 'rssi_b', 'rssi_diff', 'score_a', 'score_b', 'score_diff', 'prod_a', 'prod_b', 'a_conn', 'b_conn']
+SCALER_MEAN = doubleArrayOf(
+    0.389, 0.389, 0.0,   // rssi_a, rssi_b, rssi_diff
+    0.657, 0.657, 0.0,   // score_a, score_b, score_diff
+    0.256, 0.256,        // prod_a, prod_b
+    0.675, 0.675         // a_conn, b_conn
+)
+SCALER_SCALE = doubleArrayOf(
+    0.235, 0.235, 0.392,
+    0.219, 0.219, 0.315,
+    0.173, 0.173,
+    0.469, 0.469
+)
 ```
+
+**注意**: 上述参数为示例值，实际值请以 `convert_to_onnx.py` 打印为准。
 
 ### 4.4 冷却期逻辑
 
@@ -293,6 +331,5 @@ SCALER_SCALE = [0.235, 0.235, 0.392, 0.219, 0.219, 0.315, 0.173, 0.173, 0.469, 0
 | 2026-04-02 | 更新：扫描简化为单次模式，漫游评估增加密码过滤和降级模式 |
 | 2026-04-02 | 更新：日志系统增加实时监听，入口移至主页面 toolbar |
 | 2026-04-02 | 更新：扫描间隔（默认35s）和后端请求间隔（默认10s）独立可配置 |
-| 2026-04-04 | 修复：StandardScaler 参数从占位值更新为真实训练值 |
 | 2026-04-05 | 新增：本地 AP 性能缓存系统 (ApPerformanceCache + ApPerformanceMonitor) |
-| 2026-04-05 | 集成：性能监控服务随 MainActivity 生命周期自动启停 |
+| 2026-04-14 | 更新：Video Only 模型（10维特征），标准化参数通过 convert_to_onnx.py 生成 |

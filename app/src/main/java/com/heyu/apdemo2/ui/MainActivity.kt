@@ -1,12 +1,15 @@
 package com.heyu.apdemo2.ui
 
 import android.Manifest
+import android.animation.ArgbEvaluator
+import android.animation.ValueAnimator
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -15,6 +18,7 @@ import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.ViewGroup
+import android.view.animation.OvershootInterpolator
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -34,6 +38,7 @@ import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
 import com.heyu.apdemo2.roaming.ApPerformanceMonitor
+import com.heyu.apdemo2.roaming.RoamingMode
 
 class MainActivity : AppCompatActivity() {
 
@@ -50,8 +55,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_IP = "server_ip"
         private const val KEY_PORT = "server_port"
         private const val KEY_SCAN_INTERVAL = "scan_interval"
-        private const val KEY_POLL_INTERVAL = "poll_interval"
-        private const val KEY_AUTO_ROAMING = "auto_roaming"
+        private const val KEY_AUTO_ROAMING  = "auto_roaming"
+        private const val KEY_ROAMING_MODE  = "roaming_mode"   // "ML" | "SCORE"
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -60,11 +65,14 @@ class MainActivity : AppCompatActivity() {
             scanService = binder.getService()
             isBound = true
             getWifiFragment()?.onServiceBound(scanService!!)
-            // 同步自动漫游状态
+            // 同步自动漫游状态 & 漫游模式
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val autoRoamingEnabled = prefs.getBoolean(KEY_AUTO_ROAMING, false)
+            val roamingModeStr = prefs.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)
+            val roamingMode = runCatching { RoamingMode.valueOf(roamingModeStr!!) }.getOrDefault(RoamingMode.ML)
             scanService?.setAutoRoamingEnabled(autoRoamingEnabled)
-            Log.d(TAG, "服务已绑定，自动漫游: $autoRoamingEnabled")
+            scanService?.setRoamingMode(roamingMode)
+            Log.d(TAG, "服务已绑定，自动漫游: $autoRoamingEnabled，模式: $roamingMode")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             getWifiFragment()?.onServiceUnbound()
@@ -202,13 +210,11 @@ class MainActivity : AppCompatActivity() {
         val (ip, port) = getServerAddress()
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val scanInt = prefs.getLong(KEY_SCAN_INTERVAL, 35000L)
-        val pollInt = prefs.getLong(KEY_POLL_INTERVAL, 10000L)
 
         val intent = Intent(this, ScanForegroundService::class.java).apply {
             putExtra(ScanForegroundService.EXTRA_IP, ip)
             putExtra(ScanForegroundService.EXTRA_PORT, port)
             putExtra(ScanForegroundService.EXTRA_SCAN_INTERVAL, scanInt)
-            putExtra(ScanForegroundService.EXTRA_POLL_INTERVAL, pollInt)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -306,45 +312,81 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupRoamingButton(item: MenuItem?, initialEnabled: Boolean) {
         item?.let {
-            val actionView = it.actionView
-            if (actionView != null) {
-                actionView.isSelected = initialEnabled
-                val textView = actionView.findViewById<TextView>(R.id.roaming_button)
-                textView?.let { tv ->
-                    tv.isSelected = initialEnabled
-                    // 开启状态：白色文字；关闭状态：蓝色文字
-                    tv.setTextColor(if (initialEnabled) Color.WHITE else Color.parseColor("#2196F3"))
-                    // 设置点击事件
-                    actionView.setOnClickListener {
-                        toggleRoamingState(item)
-                    }
-                }
-            }
+            val actionView = it.actionView ?: return@let
+            val textView = actionView.findViewById<TextView>(R.id.roaming_button) ?: return@let
+            // 用 GradientDrawable 替换 selector，后续可直接动画改色
+            textView.background = makeRoamingDrawable(initialEnabled)
+            textView.setTextColor(if (initialEnabled) Color.WHITE else BLUE)
+            actionView.setOnClickListener { toggleRoamingState(item) }
         }
     }
 
     private fun toggleRoamingState(item: MenuItem) {
         val newState = !item.isChecked
         item.isChecked = newState
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_AUTO_ROAMING, newState).apply()
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_AUTO_ROAMING, newState).apply()
         scanService?.setAutoRoamingEnabled(newState)
-        updateRoamingButtonStyle(item, newState)
+        animateRoamingButton(item, newState)
         Toast.makeText(this, if (newState) "自动漫游已开启" else "自动漫游已关闭", Toast.LENGTH_SHORT).show()
     }
 
-    private fun updateRoamingButtonStyle(item: MenuItem?, enabled: Boolean) {
-        item?.let {
-            val actionView = it.actionView
-            if (actionView != null) {
-                actionView.isSelected = enabled
-                val textView = actionView.findViewById<TextView>(R.id.roaming_button)
-                textView?.let { tv ->
-                    tv.isSelected = enabled
-                    // 开启状态：白色文字 + 蓝色填充背景；关闭状态：蓝色文字 + 透明背景
-                    tv.setTextColor(if (enabled) Color.WHITE else Color.parseColor("#2196F3"))
-                }
-            }
+    // ── 漫游按钮动画 ────────────────────────────────────────────────────────
+
+    private val BLUE = Color.parseColor("#2196F3")
+
+    /** 按钮背景 GradientDrawable，enabled=true 为填充蓝，false 为镂空 */
+    private fun makeRoamingDrawable(enabled: Boolean) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = 4f * resources.displayMetrics.density
+        setColor(if (enabled) BLUE else Color.TRANSPARENT)
+        setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), BLUE)
+    }
+
+    /**
+     * 切换动画：
+     *   1. 按压缩放 → OvershootInterpolator 弹回
+     *   2. 背景色渐变（透明 ↔ 蓝色填充）
+     *   3. 文字色渐变（蓝色 ↔ 白色）
+     */
+    private fun animateRoamingButton(item: MenuItem?, enabled: Boolean) {
+        val actionView = item?.actionView ?: return
+        val textView   = actionView.findViewById<TextView>(R.id.roaming_button) ?: return
+        val drawable   = textView.background as? GradientDrawable ?: run {
+            // 万一背景不是 GradientDrawable，先替换再动画
+            val d = makeRoamingDrawable(!enabled)   // 当前状态（切换前）
+            textView.background = d; d
+        }
+
+        val bgFrom  = if (enabled) Color.TRANSPARENT else BLUE
+        val bgTo    = if (enabled) BLUE else Color.TRANSPARENT
+        val txFrom  = if (enabled) BLUE else Color.WHITE
+        val txTo    = if (enabled) Color.WHITE else BLUE
+
+        // 1. 按压缩放反馈
+        actionView.animate()
+            .scaleX(0.88f).scaleY(0.88f)
+            .setDuration(80)
+            .withEndAction {
+                actionView.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(220)
+                    .setInterpolator(OvershootInterpolator(2.2f))
+                    .start()
+            }.start()
+
+        // 2. 背景色渐变
+        ValueAnimator.ofObject(ArgbEvaluator(), bgFrom, bgTo).apply {
+            duration = 260
+            addUpdateListener { drawable.setColor(it.animatedValue as Int) }
+            start()
+        }
+
+        // 3. 文字色渐变
+        ValueAnimator.ofObject(ArgbEvaluator(), txFrom, txTo).apply {
+            duration = 260
+            addUpdateListener { textView.setTextColor(it.animatedValue as Int) }
+            start()
         }
     }
 
@@ -352,6 +394,7 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_settings -> { showServerInputDialog(); true }
             R.id.action_roaming_log -> { showRoamingLog(); true }
+            R.id.action_request_scores -> { requestScores(); true }
             R.id.action_export_log -> { exportRoamingLog(); true }
             R.id.action_auto_roaming -> {
                 // 点击事件已在 setupRoamingButton 中处理
@@ -359,6 +402,20 @@ class MainActivity : AppCompatActivity() {
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun requestScores() {
+        val service = scanService
+        if (service == null) {
+            Toast.makeText(this, "服务未启动", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (service.currentAccessPoints.isEmpty()) {
+            Toast.makeText(this, "暂无扫描数据", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在请求评分...", Toast.LENGTH_SHORT).show()
+        service.requestScores()
     }
 
     private val logHtmlStyle = """
@@ -471,15 +528,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun showServerInputDialog() {
         val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val currentIp = sharedPref.getString(KEY_IP, "")
-        val currentPort = sharedPref.getInt(KEY_PORT, -1)
+        val currentIp      = sharedPref.getString(KEY_IP, "")
+        val currentPort    = sharedPref.getInt(KEY_PORT, -1)
         val currentScanInt = sharedPref.getLong(KEY_SCAN_INTERVAL, 35000L) / 1000
-        val currentPollInt = sharedPref.getLong(KEY_POLL_INTERVAL, 10000L) / 1000
+        val currentMode    = runCatching {
+            RoamingMode.valueOf(sharedPref.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)!!)
+        }.getOrDefault(RoamingMode.ML)
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(50, 40, 50, 40)
         }
+
         val ipInput = EditText(this).apply { hint = "服务器 IP"; setText(currentIp) }
         val portInput = EditText(this).apply {
             hint = "端口"; inputType = InputType.TYPE_CLASS_NUMBER
@@ -489,35 +549,109 @@ class MainActivity : AppCompatActivity() {
             hint = "扫描间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
             setText(currentScanInt.toString())
         }
-        val pollIntInput = EditText(this).apply {
-            hint = "后端请求间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
-            setText(currentPollInt.toString())
+
+        // ── 漫游策略切换器（无 ripple 残影的自绘 segmented control）────────
+        var selectedMode = currentMode
+        val density = resources.displayMetrics.density
+
+        fun segBtn(label: String) = TextView(this).apply {
+            text = label
+            textSize = 13f
+            setPadding((14 * density).toInt(), (8 * density).toInt(),
+                       (14 * density).toInt(), (8 * density).toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 4f * density
+                setColor(Color.TRANSPARENT)
+                setStroke(density.toInt().coerceAtLeast(1), BLUE)
+            }
+            setTextColor(BLUE)
+            isClickable = true
+            isFocusable = true
         }
+
+        val btnMl    = segBtn("ML 漫游")
+        val btnScore = segBtn("评分漫游")
+
+        fun applySegState(target: TextView, active: Boolean, animate: Boolean) {
+            val bgTo = if (active) BLUE else Color.TRANSPARENT
+            val txTo = if (active) Color.WHITE else BLUE
+            if (animate) {
+                val bgFrom = if (active) Color.TRANSPARENT else BLUE
+                val txFrom = if (active) BLUE else Color.WHITE
+                ValueAnimator.ofObject(ArgbEvaluator(), bgFrom, bgTo).apply {
+                    duration = 200
+                    addUpdateListener {
+                        (target.background as? GradientDrawable)?.setColor(it.animatedValue as Int)
+                    }
+                    start()
+                }
+                ValueAnimator.ofObject(ArgbEvaluator(), txFrom, txTo).apply {
+                    duration = 200
+                    addUpdateListener { target.setTextColor(it.animatedValue as Int) }
+                    start()
+                }
+            } else {
+                (target.background as? GradientDrawable)?.setColor(bgTo)
+                target.setTextColor(txTo)
+            }
+        }
+
+        // 初始状态（不播动画）
+        applySegState(btnMl,    selectedMode == RoamingMode.ML,    animate = false)
+        applySegState(btnScore, selectedMode == RoamingMode.SCORE, animate = false)
+
+        btnMl.setOnClickListener {
+            if (selectedMode != RoamingMode.ML) {
+                selectedMode = RoamingMode.ML
+                applySegState(btnMl,    active = true,  animate = true)
+                applySegState(btnScore, active = false, animate = true)
+            }
+        }
+        btnScore.setOnClickListener {
+            if (selectedMode != RoamingMode.SCORE) {
+                selectedMode = RoamingMode.SCORE
+                applySegState(btnScore, active = true,  animate = true)
+                applySegState(btnMl,    active = false, animate = true)
+            }
+        }
+
+        val segRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            lp.marginEnd = (6 * density).toInt()
+            addView(btnMl,    lp)
+            addView(btnScore, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         container.addView(ipInput)
         container.addView(portInput)
         container.addView(TextView(this).apply { text = "\n扫描间隔 (秒):" })
         container.addView(scanIntInput)
-        container.addView(TextView(this).apply { text = "\n后端请求间隔 (秒):" })
-        container.addView(pollIntInput)
+        container.addView(TextView(this).apply { text = "\n漫游策略:" })
+        container.addView(segRow)
 
         AlertDialog.Builder(this)
             .setTitle("参数配置")
             .setView(container)
             .setPositiveButton("保存") { _, _ ->
                 val ip = ipInput.text.toString().trim()
-                val p = portInput.text.toString().trim()
+                val p  = portInput.text.toString().trim()
                 val scanInt = scanIntInput.text.toString().trim().toLongOrNull() ?: 35L
-                val pollInt = pollIntInput.text.toString().trim().toLongOrNull() ?: 10L
+                val newMode = selectedMode
+
                 if (ip.isNotEmpty() && p.isNotEmpty()) {
                     val port = p.toInt()
                     sharedPref.edit()
                         .putString(KEY_IP, ip)
                         .putInt(KEY_PORT, port)
                         .putLong(KEY_SCAN_INTERVAL, scanInt * 1000)
-                        .putLong(KEY_POLL_INTERVAL, pollInt * 1000)
+                        .putString(KEY_ROAMING_MODE, newMode.name)
                         .apply()
+                    scanService?.setRoamingMode(newMode)
                     if (isBound) {
-                        scanService?.updateConfig(ip, port, scanInt * 1000, pollInt * 1000)
+                        scanService?.updateConfig(ip, port, scanInt * 1000)
                     } else {
                         checkAndRequestPermissions()
                     }

@@ -6,6 +6,7 @@
 - [HTTP 接口文档](http/http_frontend.md) - 后端 API 接口规范
 - [需求文档](http/requirements.md) - 功能需求说明
 - [漫游实现分析](roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md) - 漫游算法与日志系统分析
+- [新AP选择模型](new_ap_selection/README.md) - Video Only 模型特征、转换与集成指南
 
 ---
 
@@ -58,6 +59,9 @@ APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
     - **Borda 排名**: 根据 RSSI 和众包评分进行初步筛选
     - **Pairwise 比较**: 使用 LightGBM ONNX 模型比较 AP 对
     - **决策逻辑**: 冷却期检查（30s）、最优 AP 判断
+- **模型文件**:
+    - `assets/ap_roaming_model_video.onnx` - Video Only 专用模型（10维特征）
+    - [转换文档](new_ap_selection/README.md) - 模型转换与集成指南
 - **密码过滤**: 漫游评估前过滤掉没有保存密码的加密 AP，只把可连接的 AP 传入选网算法
 - **降级模式**: 服务器不可用时使用默认评分执行漫游评估
 
@@ -67,11 +71,12 @@ APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
     - ✅ 漫游和手动连接已统一使用 `connectWithSpecifier()`
     - ✅ 密码过滤：跳过未保存密码的加密 AP
     - ✅ 服务器失败降级：使用默认评分仍执行评估
+    - ✅ 新模型集成：Video Only 模型（10维特征，无 biz 特征）
     - ⚠️ WifiNetworkSpecifier 每次连接需用户确认系统弹窗，无法完全自动化
 
 **相关代码**:
 - `roaming/ApSelectionManager.kt` - 选网主逻辑
-- `roaming/ApRoamingModel.kt` - ONNX 模型推理
+- `roaming/ApRoamingModel.kt` - ONNX 模型推理（Video Only 版本）
 - `roaming/ApPairwisePredictor.kt` - 预测器接口
 - `service/ScanForegroundService.kt` - 漫游评估与触发（`evaluateAndTriggerRoaming()`、`triggerRoamingConnection()`）
 
@@ -244,3 +249,4 @@ connectWithSpecifier() — 统一连接机制
 | 2026-04-02 | 扫描简化为单次模式（默认35s间隔），后端轮询独立可配（默认10s） |
 | 2026-04-02 | 漫游评估增加密码过滤和服务器失败降级模式 |
 | 2026-04-02 | 漫游日志入口移至主页面 toolbar 书本图标，支持实时更新 |
+| 2026-04-14 | 新增 Video Only 模型（10维特征），更新文档和模型转换说明 |
