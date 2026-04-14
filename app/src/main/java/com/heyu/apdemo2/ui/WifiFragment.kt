@@ -8,6 +8,7 @@ import android.net.NetworkInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.LayoutInflater
@@ -25,6 +26,7 @@ import com.heyu.apdemo2.adapter.AccessPointAdapter
 import com.heyu.apdemo2.connection.PasswordStore
 import com.heyu.apdemo2.model.AccessPoint
 import com.heyu.apdemo2.service.ScanForegroundService
+import com.heyu.apdemo2.service.WifiAccessibilityService
 
 class WifiFragment : Fragment() {
 
@@ -39,6 +41,8 @@ class WifiFragment : Fragment() {
     // 当前正在连接的目标信息
     private var connectingSsid: String? = null
     private var connectingPassword: String? = null
+    // 仅在"用户去开启无障碍服务"后置 true，onResume 消费一次后立即清除，防止 returnToApp 触发再次循环
+    private var pendingA11yRetry: Boolean = false
     private var connectingTimeoutRunnable: Runnable? = null
 
     companion object {
@@ -60,8 +64,16 @@ class WifiFragment : Fragment() {
         }
         override fun onConnectionChanged(ssid: String?, success: Boolean, errorType: String) {
             activity?.runOnUiThread {
-                if (ssid == null || !success) clearConnectingState()
-                // 同步连接状态到服务
+                if (success && ssid != null) {
+                    cancelConnectingTimeout()
+                    clearConnectingState()
+                    tvStatus.text = "状态: 已连接 $ssid"
+                    adapter.setPinned(ssid)
+                } else {
+                    clearConnectingState()
+                    if (errorType.isNotEmpty()) tvStatus.text = "状态: 连接失败 - $errorType"
+                    adapter.setPinned(null)
+                }
                 (activity as? MainActivity)?.getScanService()?.updateConnectedSsid(ssid)
             }
         }
@@ -99,6 +111,24 @@ class WifiFragment : Fragment() {
             (activity as? MainActivity)?.getScanService()?.let { onServiceBound(it) }
         }
         registerWifiStateReceiver()
+
+        // 从无障碍设置页返回时：pendingA11yRetry 消费一次后立即清除，防止后续 resume 重复触发
+        if (pendingA11yRetry &&
+            WifiAccessibilityService.isEnabled(requireContext()) &&
+            WifiAccessibilityService.getInstance() != null
+        ) {
+            val pendingSsid = connectingSsid
+            val pendingPwd  = connectingPassword
+            pendingA11yRetry = false          // 立即清除，避免循环
+            if (pendingSsid != null && pendingPwd != null) {
+                Log.d(TAG, "从无障碍设置返回，重试连接: $pendingSsid")
+                clearConnectingState()
+                val isOpen = PasswordStore.get(requireContext(), pendingSsid) == null && pendingPwd.isEmpty()
+                initiateConnect(pendingSsid, isOpen, pendingPwd)
+                return
+            }
+        }
+
         if (::adapter.isInitialized && connectingSsid == null) syncConnectedSsid()
     }
 
@@ -112,7 +142,6 @@ class WifiFragment : Fragment() {
         cancelConnectingTimeout()
         scanService?.unregisterCallback()
         scanService = null
-        // 注意：不在此处断开 Specifier 连接，由 Service 保持连接
     }
 
     // ── 供 MainActivity 调用 ──────────────────────────────────────────────────
@@ -132,38 +161,24 @@ class WifiFragment : Fragment() {
     // ── 系统 WiFi 状态同步 ────────────────────────────────────────────────────
 
     private fun syncConnectedSsid() {
-        // 正在发起 Specifier 连接时，忽略系统 WiFi 广播，避免系统自动重连覆盖连接状态
         if (connectingSsid != null) {
-            Log.d(TAG, "[syncConnectedSsid] 跳过：正在连接 $connectingSsid，忽略系统广播")
+            Log.d(TAG, "[syncConnectedSsid] 跳过：正在连接 $connectingSsid")
             return
         }
 
         val systemSsid = getSystemConnectedSsid()
         val service = (activity as? MainActivity)?.getScanService()
-        val (specifierSsid, _) = service?.getSpecifierConnectionInfo() ?: Pair(null, false)
 
-        Log.d(TAG, "[syncConnectedSsid] systemSsid=$systemSsid, specifierSsid=$specifierSsid")
+        Log.d(TAG, "[syncConnectedSsid] systemSsid=$systemSsid")
 
-        // 优先使用 Specifier 连接状态
-        val effectiveSsid = specifierSsid ?: systemSsid
+        adapter.setPinned(systemSsid)
 
-        adapter.setPinned(effectiveSsid)
-
-        when {
-            specifierSsid != null -> {
-                tvStatus.text = "状态: 已连接 ${if (specifierSsid == systemSsid) "[系统]" else "[本地]"} $specifierSsid"
-            }
-            systemSsid != null -> {
-                tvStatus.text = "状态: 已连接 [系统] $systemSsid"
-            }
-            else -> {
-                // 未连接
-            }
+        if (systemSsid != null) {
+            tvStatus.text = "状态: 已连接 $systemSsid"
         }
 
-        // 同步到服务
-        service?.updateConnectedSsid(effectiveSsid)
-        Log.d(TAG, "[syncConnectedSsid] 同步WiFi状态到服务: $effectiveSsid")
+        service?.updateConnectedSsid(systemSsid)
+        Log.d(TAG, "[syncConnectedSsid] 同步WiFi状态到服务: $systemSsid")
     }
 
     @Suppress("DEPRECATION")
@@ -181,11 +196,28 @@ class WifiFragment : Fragment() {
             @Suppress("DEPRECATION")
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 val info = intent?.getParcelableExtra<NetworkInfo>(WifiManager.EXTRA_NETWORK_INFO)
-                val state = info?.detailedState
-                if (state == NetworkInfo.DetailedState.CONNECTED ||
-                    state == NetworkInfo.DetailedState.DISCONNECTED
-                ) {
-                    if (::adapter.isInitialized) syncConnectedSsid()
+                    ?: return
+                if (!::adapter.isInitialized) return
+
+                when (info.detailedState) {
+                    NetworkInfo.DetailedState.CONNECTED -> {
+                        val systemSsid = getSystemConnectedSsid()
+                        val target = connectingSsid
+                        if (target != null && systemSsid == target) {
+                            // 连上了我们想连的网络，立即更新状态
+                            cancelConnectingTimeout()
+                            clearConnectingState()
+                            tvStatus.text = "状态: 已连接 $systemSsid"
+                            adapter.setPinned(systemSsid)
+                            (activity as? MainActivity)?.getScanService()?.updateConnectedSsid(systemSsid)
+                        } else if (target == null) {
+                            syncConnectedSsid()
+                        }
+                    }
+                    NetworkInfo.DetailedState.DISCONNECTED -> {
+                        if (connectingSsid == null) syncConnectedSsid()
+                    }
+                    else -> {}
                 }
             }
         }
@@ -209,9 +241,9 @@ class WifiFragment : Fragment() {
         if (ap.ssid == adapter.pinnedSsid) {
             AlertDialog.Builder(requireContext())
                 .setTitle("断开连接")
-                .setMessage("断开并释放到 ${ap.ssid} 的连接？")
+                .setMessage("断开到 ${ap.ssid} 的连接？")
                 .setPositiveButton("断开") { _, _ ->
-                    (activity as? MainActivity)?.getScanService()?.releaseSpecifierConnection()
+                    (activity as? MainActivity)?.getScanService()?.disconnectPinned()
                     adapter.setPinned(null)
                     tvStatus.text = "状态: 已断开"
                 }
@@ -221,34 +253,56 @@ class WifiFragment : Fragment() {
         }
 
         if (!ap.isSecured()) {
-            initiateConnect(ap.ssid, isOpen = true, password = "")
+            checkA11yAndConnect(ap.ssid, isOpen = true, password = "")
             return
         }
 
         val saved = PasswordStore.get(requireContext(), ap.ssid)
         if (saved != null) {
-            initiateConnect(ap.ssid, isOpen = false, password = saved)
+            checkA11yAndConnect(ap.ssid, isOpen = false, password = saved)
         } else {
             showPasswordDialog(ap)
         }
     }
 
-    private fun initiateConnect(ssid: String, isOpen: Boolean, password: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            Toast.makeText(requireContext(), "WifiNetworkSpecifier 需要 Android 10+", Toast.LENGTH_LONG).show()
-            tvStatus.text = "状态: 设备不支持（需 Android 10+）"
-            return
+    /**
+     * 检查无障碍服务是否已启用。
+     * - 已启用：直接发起连接
+     * - 未启用：弹窗引导用户开启，用户确认后跳转设置
+     */
+    private fun checkA11yAndConnect(ssid: String, isOpen: Boolean, password: String) {
+        if (WifiAccessibilityService.isEnabled(requireContext())) {
+            initiateConnect(ssid, isOpen, password)
+        } else {
+            AlertDialog.Builder(requireContext())
+                .setTitle("需要开启无障碍服务")
+                .setMessage(
+                    "APdemo2 需要无障碍服务权限才能实现真实 WiFi 切换（其他 App 如直播也跟随切换）。\n\n" +
+                    "请在「无障碍」→「已下载的应用」中找到「${getString(R.string.app_name)}」并开启。"
+                )
+                .setPositiveButton("去开启") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    // 记录待连接目标；pendingA11yRetry 在 onResume 中消费一次后立即清除
+                    connectingSsid = ssid
+                    connectingPassword = password
+                    pendingA11yRetry = true
+                }
+                .setNegativeButton("暂不（降级连接）") { _, _ ->
+                    initiateConnect(ssid, isOpen, password)
+                }
+                .show()
         }
+    }
 
+    private fun initiateConnect(ssid: String, isOpen: Boolean, password: String) {
         connectingSsid = ssid
         connectingPassword = password
 
-        // 提前保存密码，避免系统弹窗被取消时 onConnected 未触发导致密码丢失
         if (password.isNotEmpty()) {
             PasswordStore.save(requireContext(), ssid, password)
         }
-
-        tvStatus.text = "状态: 正在发起连接..."
 
         val service = (activity as? MainActivity)?.getScanService()
         if (service == null) {
@@ -257,36 +311,13 @@ class WifiFragment : Fragment() {
             return
         }
 
-        service.connectWithSpecifier(ssid, password, isOpen, object : ScanForegroundService.SpecifierConnectionCallback {
-            override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
-                mainHandler.post {
-                    cancelConnectingTimeout()
-                    val pwd = connectingPassword
-                    if (!pwd.isNullOrEmpty()) PasswordStore.save(requireContext(), connectedSsid, pwd)
-                    clearConnectingState()
-                    tvStatus.text = "状态: 已连接 ${if (isSystemConnection) "[系统]" else "[本地]"} $connectedSsid"
-                    adapter.setPinned(connectedSsid)
-                    Toast.makeText(requireContext(), "已连接到 $connectedSsid", Toast.LENGTH_SHORT).show()
-                }
-            }
+        tvStatus.text = "状态: 正在切换（无障碍）$ssid..."
 
-            override fun onFailed(failedSsid: String, error: String) {
-                mainHandler.post {
-                    cancelConnectingTimeout()
-                    tvStatus.text = "状态: 连接失败 - $error"
-                    clearConnectingState()
-                }
-            }
+        // 让 service 准备无障碍服务目标（不打开 WiFi 设置页）
+        service.connectToNetwork(ssid, isOpen, password)
 
-            override fun onLost(lostSsid: String?) {
-                mainHandler.post {
-                    tvStatus.text = "状态: 已断开"
-                    adapter.setPinned(null)
-                }
-            }
-        })
-
-        tvStatus.text = "状态: 正在连接 $ssid..."
+        // Fragment 自己打开 WiFi 设置页（同任务栈），确保一次 BACK 即可返回 App
+        startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
         scheduleConnectingTimeout(ssid)
     }
 
@@ -297,10 +328,7 @@ class WifiFragment : Fragment() {
         connectingTimeoutRunnable = Runnable {
             if (connectingSsid != targetSsid) return@Runnable
             Log.w(TAG, "连接超时: $targetSsid")
-            val service = (activity as? MainActivity)?.getScanService()
-            val (specifierSsid, _) = service?.getSpecifierConnectionInfo() ?: Pair(null, false)
-            // 系统 WiFi 已连上目标（直连情况下 onAvailable 可能迟到），视为成功
-            if (getSystemConnectedSsid() == targetSsid || specifierSsid == targetSsid) {
+            if (getSystemConnectedSsid() == targetSsid) {
                 tvStatus.text = "状态: 已连接 $targetSsid"
                 adapter.setPinned(targetSsid)
             } else {
@@ -319,6 +347,7 @@ class WifiFragment : Fragment() {
         cancelConnectingTimeout()
         connectingSsid = null
         connectingPassword = null
+        pendingA11yRetry = false
     }
 
     // ── 密码输入弹窗 ──────────────────────────────────────────────────────────

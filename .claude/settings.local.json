@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find . -maxdepth 2 -type f \\\\\\(-name *.kts -o -name *.gradle -o -name *.properties \\\\\\))",
+      "Bash(./gradlew assembleDebug)",
+      "Bash(./gradlew compileDebugKotlin)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}

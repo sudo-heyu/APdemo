@@ -9,11 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.wifi.WifiNetworkSpecifier
 import android.os.Binder
 import android.os.Build
 import android.os.Handler
@@ -22,7 +17,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import com.heyu.apdemo2.R
 import com.heyu.apdemo2.connection.PasswordStore
@@ -56,15 +50,6 @@ class ScanForegroundService : Service() {
     private lateinit var wifiScanner: WifiScanner
     private lateinit var apSelectionManager: ApSelectionManager
     private val apiService = ApiService()
-
-    // WifiNetworkSpecifier 连接管理
-    private var specifierNetworkCallback: ConnectivityManager.NetworkCallback? = null
-    private val connectivityManager by lazy {
-        getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    }
-    var specifierConnectedSsid: String? = null
-        private set
-    private var isSystemWifiConnection: Boolean = false
 
     var pinnedSsid: String? = null
         private set
@@ -185,41 +170,45 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 连接到指定 AP（统一使用 WifiNetworkSpecifier）。
-     * 若当前已 pinned 同一 SSID 则忽略；若传入 null 或空密码（开放网络）则直接发起连接。
+     * 手动连接：准备无障碍服务目标，但不打开 WiFi 设置页（由调用方 Fragment 负责打开，
+     * 保证同任务栈，一次 BACK 即可返回 App）。
      */
     fun connectToNetwork(ssid: String, isOpen: Boolean, password: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            Log.w(TAG, "Android 9 及以下不支持 WifiNetworkSpecifier")
-            callback?.onConnectionChanged(null, false, "需要 Android 10+")
-            return
-        }
         pinnedPassword = password
         pinnedIsOpen = isOpen
-        connectWithSpecifier(ssid, password, isOpen, object : SpecifierConnectionCallback {
-            override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
-                pinnedSsid = ssid
-                Log.d(TAG, "已连接并置顶: $ssid")
-                callback?.onConnectionChanged(ssid, true)
+
+        val a11y = WifiAccessibilityService.getInstance()
+        if (a11y == null) {
+            roamingLogManager.w("【连接失败】无障碍服务未启用，请在系统设置中开启")
+            callback?.onConnectionChanged(null, false, "请先在系统设置中启用无障碍服务")
+            return
+        }
+
+        a11y.cancel()
+        roamingLogManager.i("【连接】准备无障碍连接（等待 Fragment 打开 WiFi 设置）: $ssid")
+        a11y.prepareManualConnect(ssid, password, isOpen, object : WifiAccessibilityService.ConnectionCallback {
+            override fun onConnected(connectedSsid: String) {
+                pinnedSsid = connectedSsid
+                currentConnectedSsid = connectedSsid
+                Log.d(TAG, "无障碍服务连接成功: $connectedSsid")
+                callback?.onConnectionChanged(connectedSsid, true)
             }
-            override fun onFailed(failedSsid: String, error: String) {
-                Log.w(TAG, "连接失败: $error")
+            override fun onFailed(failedSsid: String, reason: String) {
+                Log.w(TAG, "无障碍服务连接失败: $reason")
                 if (pinnedSsid == ssid) pinnedSsid = null
-                callback?.onConnectionChanged(null, false, error)
-            }
-            override fun onLost(lostSsid: String?) {
-                if (pinnedSsid == lostSsid) {
-                    pinnedSsid = null
-                    callback?.onConnectionChanged(null, false)
-                }
+                callback?.onConnectionChanged(null, false, reason)
             }
         })
     }
 
-    /** 断开当前 pinned 连接并清除置顶。 */
+    /**
+     * 取消当前连接操作并清除本地状态。
+     * 无障碍服务为真实系统连接，无法通过代码强制断开，只清除本地状态。
+     */
     fun disconnectPinned() {
-        releaseSpecifierConnection()
+        WifiAccessibilityService.getInstance()?.cancel()
         pinnedSsid = null
+        currentConnectedSsid = null
         callback?.onConnectionChanged(null, false)
     }
 
@@ -423,7 +412,7 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 触发漫游连接（统一使用 WifiNetworkSpecifier）
+     * 触发漫游连接（纯无障碍服务，实现真实系统切换）。
      */
     private fun triggerRoamingConnection(targetAp: AccessPoint) {
         val password = PasswordStore.get(this, targetAp.ssid) ?: ""
@@ -434,29 +423,27 @@ class ScanForegroundService : Service() {
             return
         }
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            roamingLogManager.w("【切换失败】Android 9 及以下不支持自动漫游")
+        roamingLogManager.i("【开始切换】目标AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, 类型: ${if (isOpen) "开放" else "加密"}")
+
+        val a11y = WifiAccessibilityService.getInstance()
+        if (a11y == null) {
+            roamingLogManager.w("【切换失败】无障碍服务未启用，请在系统设置中开启")
             return
         }
 
-        roamingLogManager.i("【开始切换】目标AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, 类型: ${if (isOpen) "开放" else "加密"}")
+        a11y.cancel()
 
-        connectWithSpecifier(targetAp.ssid, password, isOpen, object : SpecifierConnectionCallback {
-            override fun onConnected(connectedSsid: String, isSystemConnection: Boolean) {
-                currentConnectedSsid = targetAp.ssid
-                roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → ${targetAp.ssid}")
-                callback?.onConnectionChanged(targetAp.ssid, true)
+        roamingLogManager.i("【切换】使用无障碍服务（后台漫游，服务自开 WiFi 设置）")
+        a11y.connectFromBackground(targetAp.ssid, password, isOpen, object : WifiAccessibilityService.ConnectionCallback {
+            override fun onConnected(connectedSsid: String) {
+                currentConnectedSsid = connectedSsid
+                pinnedSsid = connectedSsid
+                roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → $connectedSsid")
+                callback?.onConnectionChanged(connectedSsid, true)
             }
-            override fun onFailed(failedSsid: String, error: String) {
-                roamingLogManager.phase("评估结束", "#D32F2F", "切换失败: ${targetAp.ssid} ($error)")
-                callback?.onConnectionChanged(null, false, error)
-            }
-            override fun onLost(lostSsid: String?) {
-                if (currentConnectedSsid == lostSsid) {
-                    currentConnectedSsid = null
-                    roamingLogManager.i("【连接断开】${lostSsid}")
-                    callback?.onConnectionChanged(null, false)
-                }
+            override fun onFailed(failedSsid: String, reason: String) {
+                roamingLogManager.phase("评估结束", "#D32F2F", "切换失败: ${targetAp.ssid} ($reason)")
+                callback?.onConnectionChanged(null, false, reason)
             }
         })
     }
@@ -587,105 +574,7 @@ class ScanForegroundService : Service() {
         handlerThread.quit()
         wifiScanner.stopScan()
         apSelectionManager.close()
-        releaseSpecifierConnection()
         releaseWakeLock()
     }
 
-    // ── WifiNetworkSpecifier 连接管理 ─────────────────────────────────────────
-
-    /**
-     * 使用 WifiNetworkSpecifier 发起连接
-     * @param ssid 目标SSID
-     * @param password 密码（开放网络传空）
-     * @param callback 连接状态回调
-     */
-    // 主线程 Handler：用于 Specifier 回调的即时分发，避免排队到扫描线程
-    private val mainLooperHandler = Handler(android.os.Looper.getMainLooper())
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    fun connectWithSpecifier(ssid: String, password: String, isOpen: Boolean, callback: SpecifierConnectionCallback) {
-        releaseSpecifierConnection()
-
-        val specifier = WifiNetworkSpecifier.Builder()
-            .setSsid(ssid)
-            .apply { if (!isOpen) setWpa2Passphrase(password) }
-            .build()
-
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .setNetworkSpecifier(specifier)
-            .build()
-
-        specifierNetworkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                // 立即绑定网络并回调，不排队到扫描线程
-                connectivityManager.bindProcessToNetwork(network)
-                specifierConnectedSsid = ssid
-                isSystemWifiConnection = false
-                roamingLogManager.i("【Specifier连接成功】SSID: $ssid")
-                callback.onConnected(ssid, false)
-            }
-
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                val isSystem =
-                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                if (isSystem != isSystemWifiConnection) {
-                    isSystemWifiConnection = isSystem
-                    roamingLogManager.i("【连接类型更新】SSID: $ssid, 类型: ${if (isSystem) "系统级" else "本地"}")
-                    callback.onConnected(ssid, isSystem)
-                }
-            }
-
-            override fun onUnavailable() {
-                roamingLogManager.w("【Specifier连接失败】SSID: $ssid")
-                callback.onFailed(ssid, "连接失败或被用户取消")
-            }
-
-            override fun onLost(network: Network) {
-                connectivityManager.bindProcessToNetwork(null)
-                val wasSsid = specifierConnectedSsid
-                specifierConnectedSsid = null
-                isSystemWifiConnection = false
-                roamingLogManager.i("【Specifier连接断开】SSID: $wasSsid")
-                callback.onLost(wasSsid)
-            }
-        }
-
-        try {
-            // 回调分发到主线程，避免被扫描/上传任务阻塞
-            connectivityManager.requestNetwork(request, specifierNetworkCallback!!, mainLooperHandler)
-            roamingLogManager.i("【Specifier发起连接】SSID: $ssid")
-        } catch (e: Exception) {
-            roamingLogManager.e("【Specifier连接异常】${e.message}")
-            callback.onFailed(ssid, e.message ?: "未知错误")
-        }
-    }
-
-    /**
-     * 释放 Specifier 连接
-     */
-    fun releaseSpecifierConnection() {
-        specifierNetworkCallback?.let {
-            try { connectivityManager.unregisterNetworkCallback(it) } catch (_: Exception) {}
-        }
-        specifierNetworkCallback = null
-        specifierConnectedSsid = null
-        isSystemWifiConnection = false
-        try { connectivityManager.bindProcessToNetwork(null) } catch (_: Exception) {}
-    }
-
-    /**
-     * 获取当前 Specifier 连接状态
-     */
-    fun getSpecifierConnectionInfo(): Pair<String?, Boolean> {
-        return Pair(specifierConnectedSsid, isSystemWifiConnection)
-    }
-
-    interface SpecifierConnectionCallback {
-        fun onConnected(ssid: String, isSystemConnection: Boolean)
-        fun onFailed(ssid: String, error: String)
-        fun onLost(ssid: String?)
-    }
 }
