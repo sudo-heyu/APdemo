@@ -32,12 +32,11 @@ class WifiAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "[WifiAccessibility]"
 
-        private const val MAX_RETRIES    = 20
-        private const val RETRY_MS       = 300L
-        private const val AUTO_CLEAR_MS  = 30_000L
-        private const val FIRST_TRY_MS   = 800L
-        private const val PWD_WAIT_MS    = 700L
-        private const val BACK_DELAY_MS  = 200L
+        private const val MAX_RETRIES    = 25
+        private const val RETRY_MS       = 200L
+        private const val AUTO_CLEAR_MS  = 20_000L
+        private const val FIRST_TRY_MS   = 400L
+        private const val PWD_WAIT_MS    = 400L
 
         @Volatile private var instance: WifiAccessibilityService? = null
         fun getInstance(): WifiAccessibilityService? = instance
@@ -336,11 +335,9 @@ class WifiAccessibilityService : AccessibilityService() {
                         val ssid   = connected
                         val fromBg = openedByService
                         resetState()
-                        // 确认连接成功后才导航返回，避免未连上就跳走
-                        handler.postDelayed({
-                            if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
-                            cb?.onConnected(ssid)
-                        }, BACK_DELAY_MS)
+                        // 连接成功后立即返回
+                        if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
+                        cb?.onConnected(ssid)
                     }
                 }
             }
