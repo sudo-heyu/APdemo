@@ -13,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.Menu
@@ -37,6 +38,7 @@ import com.heyu.apdemo2.R
 import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
+import com.heyu.apdemo2.service.WifiAccessibilityService
 import com.heyu.apdemo2.roaming.ApPerformanceMonitor
 import com.heyu.apdemo2.roaming.RoamingMode
 
@@ -48,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var scanService: ScanForegroundService? = null
     private var isBound = false
     private var serviceStarted = false
+    private var a11yPrompted = false
 
     companion object {
         private const val TAG = "[MAIN_ACTIVITY]"
@@ -143,6 +146,30 @@ class MainActivity : AppCompatActivity() {
             val bound = bindService(intent, serviceConnection, 0)
             Log.d(TAG, "onStart 尝试绑定已有服务: $bound")
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!a11yPrompted && !WifiAccessibilityService.isEnabled(this)) {
+            a11yPrompted = true
+            showA11yPrompt()
+        }
+    }
+
+    private fun showA11yPrompt() {
+        AlertDialog.Builder(this)
+            .setTitle("需要开启无障碍服务")
+            .setMessage(
+                "APdemo2 需要无障碍服务权限才能实现真实 WiFi 切换（其他 App 如直播也跟随切换）。\n\n" +
+                "请在「无障碍」→「已下载的应用」中找到「${getString(R.string.app_name)}」并开启。"
+            )
+            .setPositiveButton("去开启") { _, _ ->
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            }
+            .setNegativeButton("暂不", null)
+            .show()
     }
 
     override fun onStop() {

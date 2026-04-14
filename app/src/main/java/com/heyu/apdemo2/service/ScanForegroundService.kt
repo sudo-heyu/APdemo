@@ -293,7 +293,8 @@ class ScanForegroundService : Service() {
             onSuccess = { accessPoints ->
                 if (!isRunning) return@startScan
                 currentAccessPoints = accessPoints
-                callback?.onDataUpdate(accessPoints)
+                restoreCachedScores()
+                callback?.onDataUpdate(currentAccessPoints)
                 roamingLogManager.i("扫描完成: ${accessPoints.size}个AP")
                 if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                 scheduleNextScan("就绪")
@@ -343,6 +344,19 @@ class ScanForegroundService : Service() {
         // AlarmManager 确保 Doze 期间也能唤醒
         scheduleNextCycleAlarm(scanInterval)
         releaseWakeLock()
+    }
+
+    /**
+     * 从 ApSelectionManager 缓存恢复评分到新扫描的 AccessPoint 对象
+     */
+    private fun restoreCachedScores() {
+        currentAccessPoints.forEach { ap ->
+            if (ap.score == null) {
+                apSelectionManager.getApScore(ap.ssid)?.let { cached ->
+                    ap.score = cached.toInt()
+                }
+            }
+        }
     }
 
     private fun updateScoresFromResponse(response: ScanResponse) {

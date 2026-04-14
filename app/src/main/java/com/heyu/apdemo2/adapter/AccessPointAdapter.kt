@@ -88,7 +88,7 @@ class AccessPointAdapter(
     override fun getItemCount(): Int = accessPoints.size
 
     /**
-     * 更新数据：置顶 AP 排第一，然后有评分的优先，再按信号强度排序。
+     * 更新数据：置顶 AP 排第一，然后按评分降序，无评分的按信号强度排序。
      */
     fun updateData(newData: List<AccessPoint>) {
         accessPoints = sortWithPinned(newData)
@@ -109,7 +109,7 @@ class AccessPointAdapter(
     private fun sortWithPinned(data: List<AccessPoint>): List<AccessPoint> =
         data.sortedWith(
             compareByDescending<AccessPoint> { it.ssid == pinnedSsid }
-                .thenByDescending { it.score != null }
+                .thenByDescending { it.score }
                 .thenByDescending { it.rssi }
         )
 
