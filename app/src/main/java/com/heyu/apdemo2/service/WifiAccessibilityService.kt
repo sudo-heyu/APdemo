@@ -1,14 +1,11 @@
 package com.heyu.apdemo2.service
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
 import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Path
-import android.graphics.Rect
 import android.net.NetworkInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -35,11 +32,12 @@ class WifiAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "[WifiAccessibility]"
 
-        private const val MAX_RETRIES    = 40
-        private const val RETRY_MS       = 200L
-        private const val AUTO_CLEAR_MS  = 20_000L
-        private const val PWD_WAIT_MS    = 300L
-        private const val INIT_DELAY_MS  = 800L  // 自动漫游初始等待，让WiFi列表稳定
+        private const val MAX_RETRIES    = 20
+        private const val RETRY_MS       = 300L
+        private const val AUTO_CLEAR_MS  = 30_000L
+        private const val FIRST_TRY_MS   = 800L
+        private const val PWD_WAIT_MS    = 700L
+        private const val BACK_DELAY_MS  = 200L
 
         @Volatile private var instance: WifiAccessibilityService? = null
         fun getInstance(): WifiAccessibilityService? = instance
@@ -66,7 +64,6 @@ class WifiAccessibilityService : AccessibilityService() {
     private var connectionCallback: ConnectionCallback? = null
     /** true = 服务自己打开了 WiFi 设置（漫游场景），完成后需要 returnToApp */
     @Volatile private var openedByService: Boolean = false
-    private var startTime: Long = 0  // 记录开始时间
 
     private val handler = Handler(Looper.getMainLooper())
     private var retryRunnable: Runnable? = null
@@ -112,7 +109,6 @@ class WifiAccessibilityService : AccessibilityService() {
         callback: ConnectionCallback
     ) {
         resetState()
-        startTime = System.currentTimeMillis()
         targetSsid       = ssid
         targetPassword   = if (isOpen) null else password
         connectionCallback = callback
@@ -131,7 +127,6 @@ class WifiAccessibilityService : AccessibilityService() {
         callback: ConnectionCallback
     ) {
         resetState()
-        startTime = System.currentTimeMillis()
         targetSsid       = ssid
         targetPassword   = if (isOpen) null else password
         connectionCallback = callback
@@ -144,8 +139,6 @@ class WifiAccessibilityService : AccessibilityService() {
         }
         try {
             startActivity(intent)
-            // 自动漫游：主动启动重试循环，不依赖无障碍事件
-            handler.postDelayed({ scheduleRetry() }, INIT_DELAY_MS)
         } catch (e: Exception) {
             Log.e(TAG, "打开 WiFi 设置失败: ${e.message}")
             val cb = connectionCallback
@@ -158,10 +151,7 @@ class WifiAccessibilityService : AccessibilityService() {
     fun cancel() {
         if (targetSsid != null || ssidClicked) {
             Log.i(TAG, "取消连接任务: $targetSsid")
-            val ssid = targetSsid ?: "unknown"
-            val cb = connectionCallback
             resetState()
-            cb?.onFailed(ssid, "已取消")
         }
     }
 
@@ -170,29 +160,8 @@ class WifiAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (targetSsid == null && !ssidClicked) return
-        if (ssidClicked) return
-
-        val ssid = targetSsid ?: return
-
-        // 自动漫游：已有主动重试在运行，跳过事件触发（避免冲突）
-        if (openedByService && retryRunnable != null) return
-
-        // 手动连接：通过事件触发点击
-        Log.d(TAG, "onAccessibilityEvent: 尝试点击 $ssid, eventType=${event.eventType}")
-        if (tryClickSsid(ssid)) {
-            Log.i(TAG, "已点击 SSID: $ssid")
-            ssidClicked = true
-            targetSsid = null
-            retryRunnable = null
-            cancelClearTimer()
-            val pwd = targetPassword
-            if (!pwd.isNullOrEmpty()) {
-                handler.postDelayed({ handlePasswordPhase(pwd) }, PWD_WAIT_MS)
-            }
-        } else if (retryRunnable == null) {
-            // 点击失败且没有重试在运行，启动重试
-            scheduleRetry()
-        }
+        if (ssidClicked) return   // 已点击 SSID，后续由 handler 延迟任务处理
+        scheduleRetry()
     }
 
     // ── 阶段一：查找并点击 SSID（含重试）────────────────────────────────────
@@ -205,11 +174,8 @@ class WifiAccessibilityService : AccessibilityService() {
                 val ssid = targetSsid
                 if (ssid == null) { resetState(); return }
 
-                val elapsed = System.currentTimeMillis() - startTime
-                Log.d(TAG, "重试 #$retryCount, 已用时 ${elapsed}ms, 目标: $ssid")
-
                 if (tryClickSsid(ssid)) {
-                    Log.i(TAG, "已点击 SSID: $ssid, 总用时 ${elapsed}ms")
+                    Log.i(TAG, "已点击 SSID: $ssid")
                     ssidClicked = true
                     targetSsid  = null
                     retryRunnable = null
@@ -224,7 +190,7 @@ class WifiAccessibilityService : AccessibilityService() {
                     retryCount++
                     handler.postDelayed(this, RETRY_MS)
                 } else {
-                    Log.w(TAG, "重试耗尽，未找到 SSID: $ssid, 总用时 ${elapsed}ms")
+                    Log.w(TAG, "重试耗尽，未找到 SSID: $ssid")
                     cancelClearTimer()
                     val cb = connectionCallback
                     resetState()
@@ -233,8 +199,8 @@ class WifiAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 第一次立即执行，后续延迟
-        handler.post(retryRunnable!!)
+        val delay = if (retryCount == 0) FIRST_TRY_MS else RETRY_MS
+        handler.postDelayed(retryRunnable!!, delay)
 
         // 超时保护：30s 后清理内部状态 + 回调失败，但不导航（用户仍留在 WiFi 设置页）
         if (clearRunnable == null) {
@@ -250,77 +216,43 @@ class WifiAccessibilityService : AccessibilityService() {
     }
 
     private fun tryClickSsid(ssid: String): Boolean {
-        val root = rootInActiveWindow
-        if (root == null) {
-            Log.d(TAG, "tryClickSsid: rootInActiveWindow 为 null")
-            return false
-        }
+        val root = rootInActiveWindow ?: return false
         val nodes = root.findAccessibilityNodeInfosByText(ssid)
-        if (nodes.isNullOrEmpty()) {
-            Log.d(TAG, "tryClickSsid: 未找到 '$ssid'，节点数=${root.childCount}")
-            return false
-        }
+        if (nodes.isNullOrEmpty()) return false
 
         // 精确匹配 text 或 contentDescription
-        var matchedNode: AccessibilityNodeInfo? = null
         for (node in nodes) {
             val text = node.text?.toString()?.trim('"') ?: ""
             val desc = node.contentDescription?.toString()?.trim('"') ?: ""
             if (text == ssid || desc == ssid) {
-                matchedNode = node
-                break
+                // 优先点击节点本身（避免点到右侧详情箭头）
+                if (node.isClickable && performActionSafe(node)) {
+                    return true
+                }
+                // 降级：找可点击父节点
+                if (findClickableAncestor(node)?.let { performActionSafe(it) } == true) {
+                    return true
+                }
             }
         }
-
-        // 如果只有一个候选，也接受
-        if (matchedNode == null && nodes.size == 1) {
-            matchedNode = nodes[0]
+        // 仅有一个候选时降级接受
+        if (nodes.size == 1) {
+            val node = nodes[0]
+            if (node.isClickable && performActionSafe(node)) {
+                return true
+            }
+            if (findClickableAncestor(node)?.let { performActionSafe(it) } == true) {
+                return true
+            }
         }
+        return false
+    }
 
-        if (matchedNode == null) {
-            Log.d(TAG, "tryClickSsid: 无精确匹配")
-            return false
-        }
-
-        // 关键：使用 ACTION_CLICK 点击节点本身，而不是父容器
-        // 这样可以避免点到详情箭头
+    private fun performActionSafe(node: AccessibilityNodeInfo): Boolean {
         return try {
-            // 方案1：如果节点本身可点击，直接点击
-            if (matchedNode.isClickable) {
-                Log.d(TAG, "tryClickSsid: 点击可点击节点本身")
-                matchedNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
-            }
-
-            // 方案2：通过坐标点击（更精确）
-            val bounds = android.graphics.Rect()
-            matchedNode.getBoundsInScreen(bounds)
-            Log.d(TAG, "tryClickSsid: 节点边界 $bounds，尝试点击左半部分")
-
-            // 点击节点左半部分（避免点到右边的详情箭头）
-            val clickX = bounds.left + bounds.width() / 3
-            val clickY = bounds.exactCenterY().toInt()
-
-            val clickPath = android.graphics.Path().apply {
-                moveTo(clickX.toFloat(), clickY.toFloat())
-            }
-            val gestureDesc = android.accessibilityservice.GestureDescription.Builder()
-                .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(
-                    clickPath, 0, 100
-                ))
-                .build()
-
-            dispatchGesture(gestureDesc, null, null)
-            true
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } catch (e: Exception) {
-            Log.e(TAG, "tryClickSsid 点击失败: ${e.message}")
-            // 降级方案：找可点击父节点
-            val clickable = findClickableAncestor(matchedNode)
-            if (clickable != null) {
-                Log.d(TAG, "tryClickSsid: 降级点击父节点")
-                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
-            }
+            Log.e(TAG, "performActionSafe 失败: ${e.message}")
             false
         }
     }
@@ -404,9 +336,11 @@ class WifiAccessibilityService : AccessibilityService() {
                         val ssid   = connected
                         val fromBg = openedByService
                         resetState()
-                        // 立即返回，不额外等待
-                        if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
-                        cb?.onConnected(ssid)
+                        // 确认连接成功后才导航返回，避免未连上就跳走
+                        handler.postDelayed({
+                            if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
+                            cb?.onConnected(ssid)
+                        }, BACK_DELAY_MS)
                     }
                 }
             }
