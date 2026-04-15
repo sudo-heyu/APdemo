@@ -6,7 +6,10 @@
       "Bash(./gradlew compileDebugKotlin)",
       "Bash(python:*)",
       "Bash(python3:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }

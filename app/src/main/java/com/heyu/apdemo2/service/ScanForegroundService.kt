@@ -99,6 +99,8 @@ class ScanForegroundService : Service() {
         const val ACTION_NEXT_CYCLE = "com.heyu.apdemo2.ACTION_NEXT_CYCLE"
         // SharedPreferences 与 MainActivity 共用同一个文件
         private const val PREFS_NAME = "server_settings"
+        // AP 保护生命期：弱信号 AP 至少保留的时间（毫秒）
+        private const val AP_LIFETIME_MS = 20_000L
     }
 
     override fun onCreate() {
@@ -298,10 +300,11 @@ class ScanForegroundService : Service() {
         wifiScanner.startScan(
             onSuccess = { accessPoints ->
                 if (!isRunning) return@startScan
-                currentAccessPoints = accessPoints
+                // 使用带保护机制的合并逻辑
+                currentAccessPoints = mergeScanResults(accessPoints)
                 restoreCachedScores()
                 callback?.onDataUpdate(currentAccessPoints)
-                roamingLogManager.i("扫描完成: ${accessPoints.size}个AP")
+                roamingLogManager.i("扫描完成: ${accessPoints.size}个AP, 列表保留: ${currentAccessPoints.size}个")
                 if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                 scheduleNextScan("就绪")
             },
@@ -364,6 +367,53 @@ class ScanForegroundService : Service() {
                 }
             }
         }
+    }
+
+    /**
+     * 合并扫描结果：实现弱信号 AP 保护机制
+     * - 新扫描到的 AP：添加到列表，记录当前时间
+     * - 已存在的 AP：更新信息（信号强度等），刷新时间
+     * - 未扫到的 AP：检查是否超过生命期，超过则移除，否则保留
+     */
+    private fun mergeScanResults(newAps: List<AccessPoint>): List<AccessPoint> {
+        val now = System.currentTimeMillis()
+        val result = mutableListOf<AccessPoint>()
+
+        // 1. 处理新扫描到的 AP
+        newAps.forEach { newAp ->
+            val existing = currentAccessPoints.find { it.ssid == newAp.ssid }
+            if (existing != null) {
+                // 已存在：创建更新后的对象，保留评分
+                result.add(existing.copy(
+                    bssid = newAp.bssid,
+                    rssi = newAp.rssi,
+                    frequency = newAp.frequency,
+                    capabilities = newAp.capabilities,
+                    lastSeenTime = now
+                ))
+            } else {
+                // 新 AP：设置时间戳
+                newAp.lastSeenTime = now
+                result.add(newAp)
+            }
+        }
+
+        // 2. 检查未扫到的 AP：在保护期内则保留
+        currentAccessPoints.forEach { oldAp ->
+            if (result.none { it.ssid == oldAp.ssid }) {
+                val age = now - oldAp.lastSeenTime
+                if (age < AP_LIFETIME_MS) {
+                    // 在保护期内，保留
+                    result.add(oldAp)
+                    Log.d(TAG, "AP保护: ${oldAp.ssid} 已 ${age}ms 未扫到，保留")
+                } else {
+                    // 超过生命期，移除
+                    Log.d(TAG, "AP移除: ${oldAp.ssid} 已 ${age}ms 未扫到，超过生命期")
+                }
+            }
+        }
+
+        return result.sortedByDescending { it.rssi }
     }
 
     private fun updateScoresFromResponse(response: ScanResponse) {

@@ -12,7 +12,8 @@ data class AccessPoint(
     val capabilities: String = "",      // 安全能力字符串，如 [WPA2-PSK-CCMP]
     var score: Int? = null,             // 服务器打分 (0-100)
     var reason: String? = null,         // 推荐/不推荐理由
-    var isExpanded: Boolean = false     // UI状态：是否展开详情
+    var isExpanded: Boolean = false,    // UI状态：是否展开详情
+    var lastSeenTime: Long = 0L         // 最后被扫描到的时间戳（用于保护弱信号AP）
 ) {
     /** 是否为加密网络（需要密码） */
     fun isSecured(): Boolean =
