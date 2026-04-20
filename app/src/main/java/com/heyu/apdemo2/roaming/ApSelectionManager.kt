@@ -27,11 +27,13 @@ class ApSelectionManager(
     companion object {
         private const val SCORE_MAX = 100f
         private const val RSSI_CONNECTED_THRESHOLD = -80  // 低于此值视为不可连通
-        private const val SCORE_DEFAULT = 64f              // 无服务器时的默认评分（训练集均值）
-    }
+    private const val RSSI_CANDIDATE_THRESHOLD = -80  // 评分漫游：低于此值的候选直接过滤
+    private const val SCORE_GAP_THRESHOLD = 10f       // 分差阈值：≤10时比较RSSI
+    private const val SCORE_DEFAULT = 64f              // 无服务器时的默认评分（训练集均值）
+}
 
-    private val apScores: MutableMap<String, Float> = mutableMapOf()
-    private val apReasons: MutableMap<String, String> = mutableMapOf()
+private val apScores: MutableMap<String, Float> = mutableMapOf()
+private val apReasons: MutableMap<String, String> = mutableMapOf()
 
     fun setApScore(ssid: String, score: Float) {
         apScores[ssid] = score.coerceIn(0f, SCORE_MAX)
@@ -156,10 +158,21 @@ class ApSelectionManager(
         logManager.phase("模型Pairwise", "#AD1457",
             "${apList.size}个AP双向比较, 连通阈值${RSSI_CONNECTED_THRESHOLD}dBm\n$sb")
 
-        val bestAp = ranked.firstOrNull()?.let { apMap[it] }
+        // 按 RSSI 阈值顺延选择：跳过 RSSI < -80 的 AP
+        val bestAp = ranked.mapNotNull { apMap[it] }
+            .firstOrNull { it.rssi >= RSSI_CONNECTED_THRESHOLD }
+
         if (bestAp != null) {
+            val rank = ranked.indexOf(bestAp.ssid) + 1
+            val skipped = ranked.takeWhile { apMap[it]?.rssi?.let { r -> r < RSSI_CONNECTED_THRESHOLD } ?: false }.size
+            if (skipped > 0) {
+                logManager.phase("RSSI顺延", "#FF9800",
+                    "跳过${skipped}个低信号AP，选择第${rank}名")
+            }
             logManager.phase("最佳AP(ML)", "#2E7D32",
                 "★ ${bestAp.ssid} (${bestAp.rssi}dBm) 评分: ${apScores[bestAp.ssid] ?: "无"}")
+        } else {
+            logManager.w("所有候选AP的RSSI均低于${RSSI_CONNECTED_THRESHOLD}dBm，无法选择")
         }
         return bestAp
     }
@@ -167,8 +180,13 @@ class ApSelectionManager(
     // ── 评分漫游 ─────────────────────────────────────────────────────────────
 
     /**
-     * 评分漫游：直接选众包评分最高的 AP，评分相同时按 RSSI 降序。
-     * 无评分的 AP 评分视为 -1（排在最后）。
+     * 评分漫游：选择最优 AP。
+     *
+     * 选择策略：
+     * 1. 过滤掉无评分和 RSSI < -70 dBm 的候选
+     * 2. 按评分排序，取前两名
+     * 3. 分差 ≤ 10：选 RSSI 更高的
+     * 4. 分差 > 10：选第一名
      */
     fun selectBestApByScore(candidates: List<AccessPoint>): AccessPoint? {
         if (candidates.isEmpty()) {
@@ -176,24 +194,37 @@ class ApSelectionManager(
             return null
         }
 
-        val scored = candidates.filter { apScores.containsKey(it.ssid) }
-        if (scored.isEmpty()) {
+        // 第一步：过滤无评分的AP
+        val withScore = candidates.filter { apScores.containsKey(it.ssid) }
+        if (withScore.isEmpty()) {
             logManager.w("无评分AP，无法选择")
             return null
         }
 
-        logManager.phase("评分选网", "#0277BD", "${scored.size}个候选（已过滤${candidates.size - scored.size}个无评分AP）")
+        // 第二步：过滤 RSSI < -70 dBm 的候选
+        val filtered = withScore.filter { it.rssi >= RSSI_CANDIDATE_THRESHOLD }
+        if (filtered.isEmpty()) {
+            logManager.w("所有候选RSSI均低于${RSSI_CANDIDATE_THRESHOLD}dBm，无法选择")
+            // 降级：返回评分最高的（即使RSSI低）
+            val fallback = withScore.maxByOrNull { apScores[it.ssid]!! }
+            if (fallback != null) {
+                logManager.phase("降级选择", "#FF9800",
+                    "★ ${fallback.ssid} (${fallback.rssi}dBm) 评分: ${apScores[fallback.ssid]}")
+            }
+            return fallback
+        }
 
-        if (scored.size == 1) {
-            val best = scored.first()
+        logManager.phase("评分选网", "#0277BD",
+            "${filtered.size}个候选（已过滤${candidates.size - withScore.size}个无评分, ${withScore.size - filtered.size}个低RSSI）")
+
+        if (filtered.size == 1) {
+            val best = filtered.first()
             logManager.phase("最佳AP", "#2E7D32", "★ ${best.ssid} (${best.rssi}dBm) — 唯一候选")
             return best
         }
 
-        val sorted = scored.sortedWith(
-            compareByDescending<AccessPoint> { apScores[it.ssid]!! }
-                .thenByDescending { it.rssi }
-        )
+        // 按评分降序排序
+        val sorted = filtered.sortedByDescending { apScores[it.ssid]!! }
 
         // HTML 表格日志
         val sb = StringBuilder()
@@ -206,9 +237,25 @@ class ApSelectionManager(
         sb.append("</table>")
         logManager.phase("评分排名", "#0288D1", sb.toString())
 
-        val bestAp = sorted.first()
-        logManager.phase("最佳AP(评分)", "#2E7D32",
-            "★ ${bestAp.ssid} (${bestAp.rssi}dBm) 评分: ${apScores[bestAp.ssid] ?: "无"}")
+        // 取前两名比较
+        val first = sorted[0]
+        val second = sorted[1]
+        val firstScore = apScores[first.ssid]!!
+        val secondScore = apScores[second.ssid]!!
+        val scoreGap = firstScore - secondScore
+
+        val bestAp = if (scoreGap <= SCORE_GAP_THRESHOLD) {
+            // 分差 ≤ 10：选 RSSI 更高的
+            val chosen = if (first.rssi >= second.rssi) first else second
+            logManager.phase("最佳AP(评分)", "#2E7D32",
+                "★ ${chosen.ssid} (${chosen.rssi}dBm) 评分: ${apScores[chosen.ssid]} — 分差${String.format(Locale.US, "%.0f", scoreGap)}≤${String.format(Locale.US, "%.0f", SCORE_GAP_THRESHOLD)}，选RSSI高者")
+            chosen
+        } else {
+            // 分差 > 10：选第一名
+            logManager.phase("最佳AP(评分)", "#2E7D32",
+                "★ ${first.ssid} (${first.rssi}dBm) 评分: $firstScore — 分差${String.format(Locale.US, "%.0f", scoreGap)}>${String.format(Locale.US, "%.0f", SCORE_GAP_THRESHOLD)}，选第一名")
+            first
+        }
         return bestAp
     }
 

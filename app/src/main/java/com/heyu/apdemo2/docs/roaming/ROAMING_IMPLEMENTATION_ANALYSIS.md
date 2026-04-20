@@ -53,14 +53,14 @@ evaluateAndTriggerRoaming()
     ↓
 获取可连接候选AP列表
     ↓
-Borda排名过滤 (保留前K个)
-    ├── 按RSSI排序计分
-    └── 按众包评分排序计分
-    ↓
 Pairwise比较 (LightGBM模型)
     ├── 对每对AP进行模型推理
     ├── 计算平均概率和获胜次数
-    └── 选择综合得分最高的AP
+    └── 按胜率/胜场/评分综合排序
+    ↓
+RSSI顺延选择（ML模式新增）
+    ├── 跳过 RSSI < -80 dBm 的AP
+    └── 选择第一个 RSSI ≥ -80 dBm 的AP
     ↓
 决策是否切换
     ├── 当前已是最优 → 跳过
@@ -102,6 +102,35 @@ private fun triggerRoamingConnection(targetAp: AccessPoint) {
 ```
 
 漫游和手动连接使用完全相同的 `connectWithSpecifier()` 方法。
+
+### 1.6 评分漫游选择策略
+
+`selectBestApByScore()` 方法使用以下选择逻辑：
+
+```
+候选AP列表
+    ↓
+过滤：无评分 AP → 排除
+    ↓
+过滤：RSSI < -70 dBm → 排除（如全部排除则降级选择评分最高）
+    ↓
+按评分降序排序
+    ↓
+取前两名比较
+    ├── 分差 ≤ 10 → 选 RSSI 更高的
+    └── 分差 > 10 → 选第一名
+```
+
+**参数说明**:
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `RSSI_CANDIDATE_THRESHOLD` | -70 dBm | 低于此值的候选直接过滤 |
+| `SCORE_GAP_THRESHOLD` | 10 | 分差阈值，≤10时比较RSSI |
+
+**设计理由**:
+- RSSI < -70 dBm 的信号质量差，连接体验不佳
+- 分差 ≤ 10 说明评分接近，此时信号强度更关键
+- 分差 > 10 说明评分差距明显，优先选评分高的
 
 ---
 
@@ -333,3 +362,5 @@ SCALER_SCALE = doubleArrayOf(
 | 2026-04-02 | 更新：扫描间隔（默认35s）和后端请求间隔（默认10s）独立可配置 |
 | 2026-04-05 | 新增：本地 AP 性能缓存系统 (ApPerformanceCache + ApPerformanceMonitor) |
 | 2026-04-14 | 更新：Video Only 模型（10维特征），标准化参数通过 convert_to_onnx.py 生成 |
+| 2026-04-18 | 更新：评分漫游增加 RSSI 过滤（-70dBm）和分差阈值判断（≤10选RSSI高者） |
+| 2026-04-20 | 更新：ML漫游增加 RSSI 顺延选择，跳过 RSSI < -80 dBm 的AP |
