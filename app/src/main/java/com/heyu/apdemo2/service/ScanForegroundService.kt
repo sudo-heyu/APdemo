@@ -77,6 +77,11 @@ class ScanForegroundService : Service() {
         private set
     var roamingMode: RoamingMode = RoamingMode.ML
         private set
+    var roamingCooldown: Long = 5000L  // 切换冷却期，默认5秒
+        private set
+
+    /** 上次漫游切换成功的时间戳（毫秒），用于冷却期检查 */
+    private var lastRoamingSwitchTime: Long = 0L
 
     var currentAccessPoints: List<AccessPoint> = emptyList()
         private set
@@ -242,6 +247,7 @@ class ScanForegroundService : Service() {
         serverIp     = prefs.getString("server_ip", null)
         serverPort   = prefs.getInt("server_port", -1)
         scanInterval = prefs.getLong("scan_interval", 35000L)
+        roamingCooldown = prefs.getLong("roaming_cooldown", 5000L)
     }
 
     // ── 用户主动请求评分 ──────────────────────────────────────────────────────────
@@ -448,6 +454,16 @@ class ScanForegroundService : Service() {
             return
         }
 
+        // 冷却期检查
+        val now = System.currentTimeMillis()
+        val timeSinceLastSwitch = now - lastRoamingSwitchTime
+        if (lastRoamingSwitchTime > 0 && timeSinceLastSwitch < roamingCooldown) {
+            val remaining = (roamingCooldown - timeSinceLastSwitch) / 1000
+            roamingLogManager.phase("冷却中", "#FF9800",
+                "切换冷却期剩余 ${remaining}秒，跳过本次评估")
+            return
+        }
+
         if (currentAccessPoints.isEmpty()) return
 
         // 过滤掉没有保存密码的加密AP
@@ -506,6 +522,7 @@ class ScanForegroundService : Service() {
             override fun onConnected(connectedSsid: String) {
                 currentConnectedSsid = connectedSsid
                 pinnedSsid = connectedSsid
+                lastRoamingSwitchTime = System.currentTimeMillis()  // 记录切换成功时间
                 roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → $connectedSsid")
                 callback?.onConnectionChanged(connectedSsid, true)
             }
@@ -524,6 +541,11 @@ class ScanForegroundService : Service() {
     fun setRoamingMode(mode: RoamingMode) {
         roamingMode = mode
         roamingLogManager.i("【漫游模式】已切换: ${if (mode == RoamingMode.ML) "ML模型" else "众包评分"}")
+    }
+
+    fun setRoamingCooldown(cooldown: Long) {
+        roamingCooldown = cooldown
+        roamingLogManager.i("【切换冷却期】已设置为 ${cooldown / 1000} 秒")
     }
 
     /**

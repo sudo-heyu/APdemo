@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val KEY_AUTO_ROAMING  = "auto_roaming"
         private const val KEY_ROAMING_MODE  = "roaming_mode"   // "ML" | "SCORE"
+        private const val KEY_ROAMING_COOLDOWN = "roaming_cooldown" // 切换冷却期（毫秒）
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -73,9 +74,11 @@ class MainActivity : AppCompatActivity() {
             val autoRoamingEnabled = prefs.getBoolean(KEY_AUTO_ROAMING, false)
             val roamingModeStr = prefs.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)
             val roamingMode = runCatching { RoamingMode.valueOf(roamingModeStr!!) }.getOrDefault(RoamingMode.ML)
+            val roamingCooldown = prefs.getLong(KEY_ROAMING_COOLDOWN, 5000L)
             scanService?.setAutoRoamingEnabled(autoRoamingEnabled)
             scanService?.setRoamingMode(roamingMode)
-            Log.d(TAG, "服务已绑定，自动漫游: $autoRoamingEnabled，模式: $roamingMode")
+            scanService?.setRoamingCooldown(roamingCooldown)
+            Log.d(TAG, "服务已绑定，自动漫游: $autoRoamingEnabled，模式: $roamingMode，冷却期: ${roamingCooldown}ms")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             getWifiFragment()?.onServiceUnbound()
@@ -558,6 +561,7 @@ class MainActivity : AppCompatActivity() {
         val currentIp      = sharedPref.getString(KEY_IP, "")
         val currentPort    = sharedPref.getInt(KEY_PORT, -1)
         val currentScanInt = sharedPref.getLong(KEY_SCAN_INTERVAL, 35000L) / 1000
+        val currentCooldown = sharedPref.getLong(KEY_ROAMING_COOLDOWN, 5000L) / 1000
         val currentMode    = runCatching {
             RoamingMode.valueOf(sharedPref.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)!!)
         }.getOrDefault(RoamingMode.ML)
@@ -575,6 +579,10 @@ class MainActivity : AppCompatActivity() {
         val scanIntInput = EditText(this).apply {
             hint = "扫描间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
             setText(currentScanInt.toString())
+        }
+        val cooldownInput = EditText(this).apply {
+            hint = "切换冷却期 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
+            setText(currentCooldown.toString())
         }
 
         // ── 漫游策略切换器（无 ripple 残影的自绘 segmented control）────────
@@ -656,6 +664,8 @@ class MainActivity : AppCompatActivity() {
         container.addView(portInput)
         container.addView(TextView(this).apply { text = "\n扫描间隔 (秒):" })
         container.addView(scanIntInput)
+        container.addView(TextView(this).apply { text = "\n切换冷却期 (秒):" })
+        container.addView(cooldownInput)
         container.addView(TextView(this).apply { text = "\n漫游策略:" })
         container.addView(segRow)
 
@@ -666,6 +676,7 @@ class MainActivity : AppCompatActivity() {
                 val ip = ipInput.text.toString().trim()
                 val p  = portInput.text.toString().trim()
                 val scanInt = scanIntInput.text.toString().trim().toLongOrNull() ?: 35L
+                val cooldown = cooldownInput.text.toString().trim().toLongOrNull() ?: 5L
                 val newMode = selectedMode
 
                 if (ip.isNotEmpty() && p.isNotEmpty()) {
@@ -674,9 +685,11 @@ class MainActivity : AppCompatActivity() {
                         .putString(KEY_IP, ip)
                         .putInt(KEY_PORT, port)
                         .putLong(KEY_SCAN_INTERVAL, scanInt * 1000)
+                        .putLong(KEY_ROAMING_COOLDOWN, cooldown * 1000)
                         .putString(KEY_ROAMING_MODE, newMode.name)
                         .apply()
                     scanService?.setRoamingMode(newMode)
+                    scanService?.setRoamingCooldown(cooldown * 1000)
                     if (isBound) {
                         scanService?.updateConfig(ip, port, scanInt * 1000)
                     } else {

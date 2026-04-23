@@ -9,7 +9,10 @@
       "Bash(sed:*)",
       "Bash(git checkout:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(./gradlew clean *)",
+      "Bash(./gradlew --stop)",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match \"java|studio|adb|gradle|qemu\"} | Select-Object ProcessName, Id)"
     ]
   }
 }
