@@ -8,9 +8,9 @@ import android.provider.Settings
 import android.util.Log
 
 /**
- * WiFi 连接方式诊断工具
+ * WiFi Connection Method Diagnostic Tool
  *
- * 用于诊断特定机型/系统版本的 WiFi 连接能力
+ * Used to diagnose WiFi connection capabilities for specific device models/system versions
  */
 class WiFiConnectionDiagnostic(private val context: Context) {
 
@@ -25,34 +25,34 @@ class WiFiConnectionDiagnostic(private val context: Context) {
     )
 
     /**
-     * 运行完整诊断
+     * Run full diagnostic
      */
     fun runFullDiagnostic(): List<DiagnosticResult> {
         val results = mutableListOf<DiagnosticResult>()
 
         Log.d(TAG, "=".repeat(60))
-        Log.d(TAG, "开始 WiFi 连接方式诊断")
-        Log.d(TAG, "设备信息: ${Build.BRAND} ${Build.MODEL}")
-        Log.d(TAG, "系统版本: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        Log.d(TAG, "Starting WiFi connection method diagnostic")
+        Log.d(TAG, "Device info: ${Build.BRAND} ${Build.MODEL}")
+        Log.d(TAG, "System version: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         Log.d(TAG, "=".repeat(60))
 
-        // 诊断方式一
+        // Diagnose method 1
         results.add(diagnoseMethod1())
 
-        // 诊断方式二
+        // Diagnose method 2
         results.add(diagnoseMethod2())
 
-        // 诊断方式三
+        // Diagnose method 3
         results.add(diagnoseMethod3())
 
-        // 诊断厂商特性
+        // Diagnose OEM specifics
         results.add(diagnoseOEMSpecific())
 
-        // 打印结果汇总
+        // Print result summary
         Log.d(TAG, "=".repeat(60))
-        Log.d(TAG, "诊断结果汇总:")
+        Log.d(TAG, "Diagnostic result summary:")
         results.forEach { result ->
-            val status = if (result.available) "✅ 可用" else "❌ 不可用"
+            val status = if (result.available) "✅ Available" else "❌ Unavailable"
             Log.d(TAG, "${result.method}: $status - ${result.reason}")
         }
         Log.d(TAG, "=".repeat(60))
@@ -61,67 +61,67 @@ class WiFiConnectionDiagnostic(private val context: Context) {
     }
 
     /**
-     * 诊断方式一：WifiConfiguration (Android 9-)
+     * Diagnose method 1: WifiConfiguration (Android 9-)
      */
     private fun diagnoseMethod1(): DiagnosticResult {
         val available = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
         val reason = if (available) {
-            "API ${Build.VERSION.SDK_INT} <= 28，支持 addNetwork"
+            "API ${Build.VERSION.SDK_INT} <= 28, supports addNetwork"
         } else {
-            "API ${Build.VERSION.SDK_INT} > 28，addNetwork 已废弃且受限"
+            "API ${Build.VERSION.SDK_INT} > 28, addNetwork deprecated and restricted"
         }
-        return DiagnosticResult("方式一: WifiConfiguration.addNetwork", available, reason)
+        return DiagnosticResult("Method 1: WifiConfiguration.addNetwork", available, reason)
     }
 
     /**
-     * 诊断方式二：ACTION_WIFI_ADD_NETWORKS
+     * Diagnose method 2: ACTION_WIFI_ADD_NETWORKS
      */
     private fun diagnoseMethod2(): DiagnosticResult {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return DiagnosticResult(
-                "方式二: ACTION_WIFI_ADD_NETWORKS",
+                "Method 2: ACTION_WIFI_ADD_NETWORKS",
                 false,
-                "API ${Build.VERSION.SDK_INT} < 30，不支持"
+                "API ${Build.VERSION.SDK_INT} < 30, not supported"
             )
         }
 
-        // 检查 Intent 是否可用
+        // Check if Intent is available
         val intent = Intent(Settings.ACTION_WIFI_ADD_NETWORKS)
         val resolveInfo = context.packageManager.queryIntentActivities(intent, 0)
 
         val available = resolveInfo.isNotEmpty()
         val reason = if (available) {
             if (isVivoOrIQOO()) {
-                "系统支持，但 vivo/iQOO 可能静默处理或限制第三方应用"
+                "System supported, but vivo/iQOO may silently handle or restrict third-party apps"
             } else if (isXiaomi()) {
-                "系统支持，但小米 MIUI 可能有定制行为"
+                "System supported, but Xiaomi MIUI may have custom behaviors"
             } else if (isOppo()) {
-                "系统支持，但 OPPO ColorOS 可能有定制行为"
+                "System supported, but OPPO ColorOS may have custom behaviors"
             } else {
-                "系统原生支持，应该正常弹窗"
+                "System natively supported, should display popup normally"
             }
         } else {
-            "系统未注册此 Intent 处理器"
+            "System has no registered Intent handler"
         }
 
-        return DiagnosticResult("方式二: ACTION_WIFI_ADD_NETWORKS", available, reason)
+        return DiagnosticResult("Method 2: ACTION_WIFI_ADD_NETWORKS", available, reason)
     }
 
     /**
-     * 诊断方式三：WifiNetworkSpecifier
+     * Diagnose method 3: WifiNetworkSpecifier
      */
     private fun diagnoseMethod3(): DiagnosticResult {
         val available = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         val reason = if (available) {
-            "API ${Build.VERSION.SDK_INT} >= 29，支持 requestNetwork，但会产生本地连接而非系统切换"
+            "API ${Build.VERSION.SDK_INT} >= 29, supports requestNetwork, but creates local connection instead of system switch"
         } else {
-            "API ${Build.VERSION.SDK_INT} < 29，不支持"
+            "API ${Build.VERSION.SDK_INT} < 29, not supported"
         }
-        return DiagnosticResult("方式三: WifiNetworkSpecifier (假连接)", available, reason)
+        return DiagnosticResult("Method 3: WifiNetworkSpecifier (pseudo-connection)", available, reason)
     }
 
     /**
-     * 诊断厂商特性
+     * Diagnose OEM specifics
      */
     private fun diagnoseOEMSpecific(): DiagnosticResult {
         val brand = Build.BRAND.lowercase()
@@ -130,47 +130,47 @@ class WiFiConnectionDiagnostic(private val context: Context) {
         return when {
             brand.contains("vivo") || model.contains("vivo") ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     false,
-                    "vivo 设备：OriginOS 深度定制，ACTION_WIFI_ADD_NETWORKS 可能被禁用或需特殊权限"
+                    "vivo device: OriginOS deeply customized, ACTION_WIFI_ADD_NETWORKS may be disabled or require special permissions"
                 )
             brand.contains("iqoo") || model.contains("iqoo") ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     false,
-                    "iQOO 设备：同 vivo OriginOS，WiFi 管理严格限制第三方应用"
+                    "iQOO device: Same as vivo OriginOS, WiFi management strictly restricted for third-party apps"
                 )
             brand.contains("xiaomi") || model.contains("xiaomi") ||
             brand.contains("redmi") || model.contains("redmi") ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     true,
-                    "小米/Redmi 设备：MIUI 有定制，但通常支持标准 API"
+                    "Xiaomi/Redmi device: MIUI customized, but usually supports standard API"
                 )
             brand.contains("oppo") || model.contains("oppo") ||
             brand.contains("realme") || model.contains("realme") ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     true,
-                    "OPPO/realme 设备：ColorOS 有定制，但通常支持标准 API"
+                    "OPPO/realme device: ColorOS customized, but usually supports standard API"
                 )
             brand.contains("samsung") || model.contains("samsung") ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     true,
-                    "三星设备：OneUI 相对开放，标准 API 支持良好"
+                    "Samsung device: OneUI relatively open, standard API well supported"
                 )
             else ->
                 DiagnosticResult(
-                    "厂商特性",
+                    "OEM Characteristics",
                     true,
-                    "$brand 设备：未识别为特殊定制系统"
+                    "$brand device: Not recognized as specially customized system"
                 )
         }
     }
 
     /**
-     * 检查是否是 vivo/iQOO 设备
+     * Check if device is vivo/iQOO
      */
     fun isVivoOrIQOO(): Boolean {
         val brand = Build.BRAND.lowercase()
@@ -180,7 +180,7 @@ class WiFiConnectionDiagnostic(private val context: Context) {
     }
 
     /**
-     * 检查是否是小米设备
+     * Check if device is Xiaomi
      */
     fun isXiaomi(): Boolean {
         val brand = Build.BRAND.lowercase()
@@ -188,7 +188,7 @@ class WiFiConnectionDiagnostic(private val context: Context) {
     }
 
     /**
-     * 检查是否是 OPPO 设备
+     * Check if device is OPPO
      */
     fun isOppo(): Boolean {
         val brand = Build.BRAND.lowercase()
@@ -196,18 +196,18 @@ class WiFiConnectionDiagnostic(private val context: Context) {
     }
 
     /**
-     * 获取推荐的连接方式
+     * Get recommended connection method
      */
     fun getRecommendedMethod(): String {
         return when {
             isVivoOrIQOO() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
-                "方式五/六: 跳转设置页 + 手动/自动操作 (vivo/iQOO 限制标准API)"
+                "Method 5/6: Jump to settings page + manual/auto operation (vivo/iQOO restricts standard API)"
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
-                "方式二: ACTION_WIFI_ADD_NETWORKS"
+                "Method 2: ACTION_WIFI_ADD_NETWORKS"
             Build.VERSION.SDK_INT == Build.VERSION_CODES.Q ->
-                "方式五/六: Android 10 限制，需使用设置页方案"
+                "Method 5/6: Android 10 restrictions, need to use settings page approach"
             else ->
-                "方式一: WifiConfiguration (Android 9-)"
+                "Method 1: WifiConfiguration (Android 9-)"
         }
     }
 }

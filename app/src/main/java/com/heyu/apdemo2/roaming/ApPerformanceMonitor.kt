@@ -11,15 +11,15 @@ import android.os.Looper
 import android.util.Log
 
 /**
- * AP 性能监控服务
+ * AP Performance Monitoring Service
  *
- * 在后台定期采样当前连接 WiFi 的性能数据
+ * Periodically samples performance data of currently connected WiFi in background
  */
 class ApPerformanceMonitor : Service() {
 
     companion object {
         private const val TAG = "[ApPerformanceMonitor]"
-        private const val SAMPLE_INTERVAL_MS = 5000L  // 每 5 秒采样一次
+        private const val SAMPLE_INTERVAL_MS = 5000L  // Sample every 5 seconds
 
         fun start(context: Context) {
             val intent = Intent(context, ApPerformanceMonitor::class.java)
@@ -51,14 +51,14 @@ class ApPerformanceMonitor : Service() {
         super.onCreate()
         performanceCache = ApPerformanceCache.getInstance(this)
         wifiManager = getSystemService(Context.WIFI_SERVICE) as WifiManager
-        Log.d(TAG, "监控服务创建")
+        Log.d(TAG, "Monitoring service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!isRunning) {
             isRunning = true
             handler.post(sampleRunnable)
-            Log.d(TAG, "性能监控启动")
+            Log.d(TAG, "Performance monitoring started")
         }
         return START_STICKY
     }
@@ -68,7 +68,7 @@ class ApPerformanceMonitor : Service() {
         isRunning = false
         handler.removeCallbacks(sampleRunnable)
         performanceCache.stopMonitoring()
-        Log.d(TAG, "性能监控停止")
+        Log.d(TAG, "Performance monitoring stopped")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -80,7 +80,7 @@ class ApPerformanceMonitor : Service() {
             val rssi = connectionInfo?.rssi ?: 0
 
             if (ssid.isNullOrEmpty() || ssid == "<unknown ssid>") {
-                // 未连接或获取失败
+                // Not connected or failed to get info
                 if (lastSsid != null) {
                     performanceCache.stopMonitoring()
                     lastSsid = null
@@ -88,17 +88,17 @@ class ApPerformanceMonitor : Service() {
                 return
             }
 
-            // AP 切换了，重新开始监控
+            // AP switched, restart monitoring
             if (ssid != lastSsid) {
                 performanceCache.startMonitoring(ssid, rssi)
                 lastSsid = ssid
-                Log.i(TAG, "切换到新 AP: $ssid, RSSI: $rssi")
+                Log.i(TAG, "Switched to new AP: $ssid, RSSI: $rssi")
             } else {
-                // 更新当前 RSSI（信号可能变化）
+                // Update current RSSI (signal may have changed)
                 performanceCache.updateRssi(rssi)
             }
 
-            // 执行采样
+            // Execute sampling
             val record = performanceCache.sample()
             record?.let {
                 Log.v(TAG, "${it.ssid}: rx=${it.rxSpeedKbps.toInt()}KB/s, " +
@@ -106,7 +106,7 @@ class ApPerformanceMonitor : Service() {
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "采样失败: ${e.message}")
+            Log.e(TAG, "Sampling failed: ${e.message}")
         }
     }
 }

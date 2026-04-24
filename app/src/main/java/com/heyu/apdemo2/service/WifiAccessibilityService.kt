@@ -1,7 +1,6 @@
 package com.heyu.apdemo2.service
 
 import android.accessibilityservice.AccessibilityService
-import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -19,24 +18,23 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * WiFi 无障碍自动连接服务
+ * WiFi Accessibility Auto-Connect Service
  *
- * 架构：
- * - 手动连接（Fragment 触发）：Fragment 打开 WiFi 设置页（同任务栈），服务自动点击后 BACK 一次回到 App
- * - 漫游（后台触发）：服务自己打开 WiFi 设置页，完成后用 returnToApp() 回到 App
- *
- * 核心逻辑：简单重试（每 300ms 扫描一次节点树），不依赖状态机。
+ * 稳定版本：
+ * 1. 主流程：点击SSID → 处理密码 → 等待WiFi广播确认 → 返回
+ * 2. 保底：超时后强制返回
  */
 class WifiAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "[WifiAccessibility]"
 
-        private const val MAX_RETRIES    = 25
-        private const val RETRY_MS       = 200L
-        private const val AUTO_CLEAR_MS  = 20_000L
-        private const val FIRST_TRY_MS   = 400L
-        private const val PWD_WAIT_MS    = 400L
+        private const val MAX_RETRIES       = 20
+        private const val RETRY_MS          = 300L
+        private const val FIRST_TRY_MS      = 500L
+        private const val PWD_WAIT_MS       = 500L
+        private const val TOTAL_TIMEOUT_MS  = 20_000L
+        private const val FORCE_RETURN_MS   = 5_000L   // 点击SSID后多久强制返回
 
         @Volatile private var instance: WifiAccessibilityService? = null
         fun getInstance(): WifiAccessibilityService? = instance
@@ -56,36 +54,38 @@ class WifiAccessibilityService : AccessibilityService() {
         fun onFailed(ssid: String, reason: String)
     }
 
-    // ── 当前连接任务 ──────────────────────────────────────────────────────────
+    // ── State ──────────────────────────────────────────────────────────
 
     @Volatile private var targetSsid: String? = null
-    @Volatile private var targetPassword: String? = null   // null = 开放网络
+    @Volatile private var targetPassword: String? = null
     private var connectionCallback: ConnectionCallback? = null
-    /** true = 服务自己打开了 WiFi 设置（漫游场景），完成后需要 returnToApp */
     @Volatile private var openedByService: Boolean = false
+
+    @Volatile private var ssidClicked: Boolean = false
+    @Volatile private var waitingForConnection: Boolean = false
 
     private val handler = Handler(Looper.getMainLooper())
     private var retryRunnable: Runnable? = null
-    private var clearRunnable: Runnable? = null
+    private var totalTimeoutRunnable: Runnable? = null
+    private var forceReturnRunnable: Runnable? = null
     private var retryCount = 0
-    private var ssidClicked = false
     private var wifiReceiver: BroadcastReceiver? = null
 
-    // ── 生命周期 ─────────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────
 
     override fun onServiceConnected() {
         instance = this
-        Log.i(TAG, "服务已连接")
+        Log.i(TAG, "Service connected")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
-        Log.i(TAG, "服务已解绑")
+        Log.i(TAG, "Service unbound")
         return super.onUnbind(intent)
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "服务被中断")
+        Log.w(TAG, "Service interrupted")
         resetState()
     }
 
@@ -95,12 +95,8 @@ class WifiAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    // ── 公开 API ─────────────────────────────────────────────────────────────
+    // ── Public API ─────────────────────────────────────────────────────
 
-    /**
-     * 手动连接：Fragment 自己打开 WiFi 设置（同任务栈），服务只负责自动化 + 按一次 BACK 返回。
-     * 调用方需在调用此方法后立即执行 startActivity(Settings.ACTION_WIFI_SETTINGS)。
-     */
     fun prepareManualConnect(
         ssid: String,
         password: String?,
@@ -108,17 +104,17 @@ class WifiAccessibilityService : AccessibilityService() {
         callback: ConnectionCallback
     ) {
         resetState()
-        targetSsid       = ssid
-        targetPassword   = if (isOpen) null else password
+        targetSsid = ssid
+        targetPassword = if (isOpen) null else password
         connectionCallback = callback
-        openedByService  = false
+        openedByService = false
+        ssidClicked = false
+        waitingForConnection = false
         registerWifiReceiver()
-        Log.i(TAG, "准备手动连接: $ssid, 开放=$isOpen")
+        scheduleTotalTimeout()
+        Log.i(TAG, "Manual connection prepared: $ssid")
     }
 
-    /**
-     * 漫游/后台连接：服务自己打开 WiFi 设置，完成后 returnToApp() 返回。
-     */
     fun connectFromBackground(
         ssid: String,
         password: String?,
@@ -126,12 +122,15 @@ class WifiAccessibilityService : AccessibilityService() {
         callback: ConnectionCallback
     ) {
         resetState()
-        targetSsid       = ssid
-        targetPassword   = if (isOpen) null else password
+        targetSsid = ssid
+        targetPassword = if (isOpen) null else password
         connectionCallback = callback
-        openedByService  = true
+        openedByService = true
+        ssidClicked = false
+        waitingForConnection = false
         registerWifiReceiver()
-        Log.i(TAG, "后台连接: $ssid, 开放=$isOpen")
+        scheduleTotalTimeout()
+        Log.i(TAG, "Background connection: $ssid")
 
         val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -139,79 +138,75 @@ class WifiAccessibilityService : AccessibilityService() {
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "打开 WiFi 设置失败: ${e.message}")
+            Log.e(TAG, "Failed to open WiFi settings: ${e.message}")
             val cb = connectionCallback
             resetState()
-            cb?.onFailed(ssid, "无法打开 WiFi 设置页")
+            cb?.onFailed(ssid, "Unable to open WiFi settings")
         }
     }
 
-    /** 取消当前任务，恢复空闲 */
     fun cancel() {
         if (targetSsid != null || ssidClicked) {
-            Log.i(TAG, "取消连接任务: $targetSsid")
+            Log.i(TAG, "Cancelling")
             resetState()
         }
     }
 
-    // ── 无障碍事件入口 ────────────────────────────────────────────────────────
+    // ── Accessibility Event ───────────────────────────────────────────────
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (targetSsid == null && !ssidClicked) return
-        if (ssidClicked) return   // 已点击 SSID，后续由 handler 延迟任务处理
-        scheduleRetry()
+
+        // 还没点击SSID，尝试点击
+        if (!ssidClicked && targetSsid != null) {
+            scheduleSsidClick()
+        }
     }
 
-    // ── 阶段一：查找并点击 SSID（含重试）────────────────────────────────────
+    // ── Phase 1: Click SSID ──────────────────────────────────────────────
 
-    private fun scheduleRetry() {
-        if (retryRunnable != null) return   // 已在队列中，不重复安排
+    private fun scheduleSsidClick() {
+        if (retryRunnable != null) return
+        if (ssidClicked) return
 
-        retryRunnable = object : Runnable {
+        val runnable = object : Runnable {
             override fun run() {
                 val ssid = targetSsid
-                if (ssid == null) { resetState(); return }
+                if (ssid == null) {
+                    resetState()
+                    return
+                }
 
                 if (tryClickSsid(ssid)) {
-                    Log.i(TAG, "已点击 SSID: $ssid")
+                    Log.i(TAG, "SSID clicked: $ssid")
                     ssidClicked = true
-                    targetSsid  = null
                     retryRunnable = null
-                    cancelClearTimer()
+                    retryCount = 0
 
+                    // 安排强制返回保底
+                    scheduleForceReturn()
+
+                    // 如果有密码，等待密码对话框
                     val pwd = targetPassword
                     if (!pwd.isNullOrEmpty()) {
-                        handler.postDelayed({ handlePasswordPhase(pwd) }, PWD_WAIT_MS)
+                        handler.postDelayed({ handlePasswordDialog(pwd) }, PWD_WAIT_MS)
                     }
-                    // 开放/已保存网络：不主动导航，等 WiFi 广播确认后再返回
+                    // 无密码或已保存网络：等待WiFi广播确认连接成功
                 } else if (retryCount < MAX_RETRIES) {
                     retryCount++
                     handler.postDelayed(this, RETRY_MS)
                 } else {
-                    Log.w(TAG, "重试耗尽，未找到 SSID: $ssid")
-                    cancelClearTimer()
+                    Log.w(TAG, "SSID not found: $ssid")
                     val cb = connectionCallback
                     resetState()
-                    cb?.onFailed(ssid, "未在 WiFi 列表中找到目标网络")
+                    cb?.onFailed(ssid, "Network not found")
                 }
             }
         }
 
-        val delay = if (retryCount == 0) FIRST_TRY_MS else RETRY_MS
-        handler.postDelayed(retryRunnable!!, delay)
-
-        // 超时保护：30s 后清理内部状态 + 回调失败，但不导航（用户仍留在 WiFi 设置页）
-        if (clearRunnable == null) {
-            clearRunnable = Runnable {
-                Log.w(TAG, "自动超时清理（不导航，由用户自行返回）")
-                val ssid = targetSsid ?: if (ssidClicked) "unknown" else return@Runnable
-                val cb   = connectionCallback
-                resetState()
-                cb?.onFailed(ssid, "连接超时")
-            }
-            handler.postDelayed(clearRunnable!!, AUTO_CLEAR_MS)
-        }
+        retryRunnable = runnable
+        handler.postDelayed(runnable, FIRST_TRY_MS)
     }
 
     private fun tryClickSsid(ssid: String): Boolean {
@@ -219,103 +214,86 @@ class WifiAccessibilityService : AccessibilityService() {
         val nodes = root.findAccessibilityNodeInfosByText(ssid)
         if (nodes.isNullOrEmpty()) return false
 
-        // 精确匹配 text 或 contentDescription
         for (node in nodes) {
             val text = node.text?.toString()?.trim('"') ?: ""
             val desc = node.contentDescription?.toString()?.trim('"') ?: ""
-            if (text == ssid || desc == ssid) {
-                // 优先点击节点本身（避免点到右侧详情箭头）
-                if (node.isClickable && performActionSafe(node)) {
-                    return true
-                }
-                // 降级：找可点击父节点
-                if (findClickableAncestor(node)?.let { performActionSafe(it) } == true) {
-                    return true
-                }
+
+            if (text == ssid || desc == ssid || text.contains(ssid)) {
+                if (performClick(node)) return true
+                if (clickClickableParent(node)) return true
             }
         }
-        // 仅有一个候选时降级接受
+
+        // 只有一个候选时，直接点击
         if (nodes.size == 1) {
-            val node = nodes[0]
-            if (node.isClickable && performActionSafe(node)) {
-                return true
-            }
-            if (findClickableAncestor(node)?.let { performActionSafe(it) } == true) {
-                return true
-            }
+            if (performClick(nodes[0])) return true
+            if (clickClickableParent(nodes[0])) return true
         }
+
         return false
     }
 
-    private fun performActionSafe(node: AccessibilityNodeInfo): Boolean {
+    private fun performClick(node: AccessibilityNodeInfo): Boolean {
+        if (!node.isClickable) return false
         return try {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } catch (e: Exception) {
-            Log.e(TAG, "performActionSafe 失败: ${e.message}")
+            Log.e(TAG, "Click failed: ${e.message}")
             false
         }
     }
 
-    // ── 阶段二：填写密码并点击"连接" ─────────────────────────────────────────
-
-    private fun handlePasswordPhase(password: String) {
-        val root = rootInActiveWindow
-        if (root != null) {
-            val pwdNode = findPasswordNode(root)
-            if (pwdNode != null) {
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        password
-                    )
+    private fun clickClickableParent(node: AccessibilityNodeInfo): Boolean {
+        var cur = node.parent
+        repeat(5) {
+            if (cur?.isClickable == true) {
+                return try {
+                    cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } catch (e: Exception) {
+                    false
                 }
-                pwdNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                Log.i(TAG, "已填写密码")
+            }
+            cur = cur?.parent
+        }
+        return false
+    }
 
-                val btn = findConnectButton(root)
+    // ── Phase 2: Handle Password ─────────────────────────────────────────
+
+    private fun handlePasswordDialog(password: String) {
+        if (!ssidClicked) return
+
+        val root = rootInActiveWindow ?: return
+
+        val pwdNode = findPasswordNode(root)
+        if (pwdNode != null) {
+            // 输入密码
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    password
+                )
+            }
+            pwdNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            Log.i(TAG, "Password entered")
+
+            // 点击连接按钮
+            handler.postDelayed({
+                val currentRoot = rootInActiveWindow ?: return@postDelayed
+                val btn = findConnectButton(currentRoot)
                 if (btn != null) {
-                    btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    Log.i(TAG, "已点击连接按钮")
-                } else {
-                    Log.w(TAG, "未找到连接按钮，等待广播确认")
+                    performClick(btn) || clickClickableParent(btn)
+                    Log.i(TAG, "Connect button clicked")
                 }
-            } else {
-                Log.d(TAG, "密码框未出现（网络已保存），等待广播确认")
-            }
+            }, 300L)
+        } else {
+            // 没找到密码框，可能网络已保存
+            Log.d(TAG, "No password field, network may be saved")
         }
-        // 填写密码并点击连接后，不主动导航，等 WiFi 广播确认连接成功后再返回
+        // 之后等待WiFi广播确认连接成功
     }
 
-    /**
-     * 把 App 现有任务拉回前台，不创建新 Activity、不破坏返回栈。
-     * 优先用 AppTask.moveToFront()（精确），失败时降级为 LaunchIntent。
-     * 仅用于后台（漫游）场景，手动场景直接 BACK 即可。
-     */
-    private fun returnToApp() {
-        try {
-            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val task = am.appTasks.firstOrNull()
-            if (task != null) {
-                task.moveToFront()
-                Log.i(TAG, "已通过 moveToFront 返回 App")
-                return
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "moveToFront 失败: ${e.message}")
-        }
-        // 降级：通过 LaunchIntent 拉起（FLAG_SINGLE_TOP 保证不重建已有实例）
-        try {
-            val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            } ?: return
-            startActivity(intent)
-            Log.i(TAG, "已通过 LaunchIntent 返回 App")
-        } catch (e: Exception) {
-            Log.w(TAG, "返回 App 失败: ${e.message}")
-        }
-    }
-
-    // ── WiFi 连接广播（结果确认）────────────────────────────────────────────
+    // ── Phase 3: WiFi Broadcast (Connection Confirmation) ───────────────
 
     private fun registerWifiReceiver() {
         unregisterWifiReceiver()
@@ -325,23 +303,23 @@ class WifiAccessibilityService : AccessibilityService() {
                 if (intent?.action != WifiManager.NETWORK_STATE_CHANGED_ACTION) return
                 val info = intent.getParcelableExtra<NetworkInfo>(WifiManager.EXTRA_NETWORK_INFO)
                     ?: return
+
                 if (info.detailedState == NetworkInfo.DetailedState.CONNECTED) {
-                    val connected = getCurrentSsid() ?: return
-                    val target = targetSsid   // 注意：此时 targetSsid 可能已为 null（ssidClicked 阶段清空）
-                    // ssidClicked 为 true 时说明我们已操作，且还未被其他连接覆盖
-                    if (ssidClicked && (target == null || target == connected)) {
-                        Log.i(TAG, "广播确认连接成功: $connected，准备返回 App")
-                        val cb     = connectionCallback
-                        val ssid   = connected
-                        val fromBg = openedByService
-                        resetState()
-                        // 连接成功后立即返回
-                        if (fromBg) returnToApp() else performGlobalAction(GLOBAL_ACTION_BACK)
-                        cb?.onConnected(ssid)
+                    val connectedSsid = getCurrentSsid()
+                    Log.d(TAG, "WiFi connected: $connectedSsid, ssidClicked=$ssidClicked")
+
+                    if (ssidClicked && connectedSsid != null) {
+                        // 确认连接成功
+                        val target = targetSsid
+                        if (target == null || target == connectedSsid) {
+                            Log.i(TAG, "Connection confirmed: $connectedSsid")
+                            onConnectionSuccess(connectedSsid)
+                        }
                     }
                 }
             }
         }
+
         val filter = IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(wifiReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -352,7 +330,11 @@ class WifiAccessibilityService : AccessibilityService() {
     }
 
     private fun unregisterWifiReceiver() {
-        try { wifiReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+        try {
+            wifiReceiver?.let { unregisterReceiver(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unregister receiver failed: ${e.message}")
+        }
         wifiReceiver = null
     }
 
@@ -364,64 +346,133 @@ class WifiAccessibilityService : AccessibilityService() {
             .takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
     }
 
-    // ── 工具：节点查找 ────────────────────────────────────────────────────────
+    private fun onConnectionSuccess(ssid: String) {
+        val cb = connectionCallback
+        val fromBg = openedByService
+        resetState()
+
+        handler.postDelayed({
+            Log.i(TAG, "Returning, fromBg=$fromBg")
+            if (fromBg) {
+                returnToApp()
+            } else {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            cb?.onConnected(ssid)
+        }, 300L)
+    }
+
+    // ── Force Return (Fallback) ──────────────────────────────────────────
+
+    private fun scheduleForceReturn() {
+        cancelForceReturn()
+        forceReturnRunnable = Runnable {
+            if (!ssidClicked) return@Runnable
+
+            Log.i(TAG, "Force return triggered (timeout)")
+            val ssid = targetSsid ?: "unknown"
+            val cb = connectionCallback
+            val fromBg = openedByService
+            resetState()
+
+            handler.postDelayed({
+                Log.i(TAG, "Force returning, fromBg=$fromBg")
+                if (fromBg) {
+                    returnToApp()
+                } else {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
+                cb?.onConnected(ssid)
+            }, 200L)
+        }
+        handler.postDelayed(forceReturnRunnable!!, FORCE_RETURN_MS)
+    }
+
+    private fun returnToApp() {
+        // 优先使用 BACK，最稳定
+        Log.d(TAG, "Returning via GLOBAL_ACTION_BACK")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    // ── Total Timeout ────────────────────────────────────────────────────
+
+    private fun scheduleTotalTimeout() {
+        cancelTotalTimeout()
+        totalTimeoutRunnable = Runnable {
+            Log.w(TAG, "Total timeout")
+            val ssid = targetSsid ?: "unknown"
+            val cb = connectionCallback
+            resetState()
+            cb?.onFailed(ssid, "Connection timeout")
+        }
+        handler.postDelayed(totalTimeoutRunnable!!, TOTAL_TIMEOUT_MS)
+    }
+
+    // ── Utilities ─────────────────────────────────────────────────────────
 
     private fun findPasswordNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            if (node.className?.contains("EditText") == true) {
+            val className = node.className?.toString() ?: ""
+            if (className.contains("EditText") || className.contains("Edit")) {
                 val t = node.inputType
                 val isPassword =
                     (t and InputType.TYPE_TEXT_VARIATION_PASSWORD != 0) ||
                     (t and InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD != 0) ||
-                    (t and InputType.TYPE_NUMBER_VARIATION_PASSWORD != 0) ||
-                    t == 0x81 || t == 0x91
+                    t == 0x81 || t == 0x91 || t == 0x12
                 if (isPassword) return node
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
         }
         return null
     }
 
     private fun findConnectButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        for (text in listOf("连接", "加入", "Connect", "Join", "确定", "OK")) {
+        val texts = listOf("连接", "Connect", "加入", "Join", "确定", "OK")
+        for (text in texts) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
                 if (node.isClickable) return node
-                findClickableAncestor(node)?.let { return it }
+                var parent = node.parent
+                repeat(3) {
+                    if (parent?.isClickable == true) return parent
+                    parent = parent?.parent
+                }
             }
         }
         return null
     }
 
-    private fun findClickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var cur: AccessibilityNodeInfo? = node
-        repeat(8) {
-            if (cur?.isClickable == true) return cur
-            cur = cur?.parent
-        }
-        return null
-    }
-
-    // ── 状态清理 ──────────────────────────────────────────────────────────────
+    // ── State Cleanup ──────────────────────────────────────────────────────
 
     private fun resetState() {
         retryRunnable?.let { handler.removeCallbacks(it) }
+        totalTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        forceReturnRunnable?.let { handler.removeCallbacks(it) }
         retryRunnable = null
-        retryCount    = 0
-        ssidClicked   = false
-        targetSsid    = null
+        totalTimeoutRunnable = null
+        forceReturnRunnable = null
+        retryCount = 0
+        targetSsid = null
         targetPassword = null
         connectionCallback = null
         openedByService = false
-        cancelClearTimer()
+        ssidClicked = false
+        waitingForConnection = false
         unregisterWifiReceiver()
     }
 
-    private fun cancelClearTimer() {
-        clearRunnable?.let { handler.removeCallbacks(it) }
-        clearRunnable = null
+    private fun cancelTotalTimeout() {
+        totalTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        totalTimeoutRunnable = null
+    }
+
+    private fun cancelForceReturn() {
+        forceReturnRunnable?.let { handler.removeCallbacks(it) }
+        forceReturnRunnable = null
     }
 }

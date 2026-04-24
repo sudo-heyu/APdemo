@@ -3,9 +3,9 @@
     <item
         android:id="@+id/nav_wifi"
         android:icon="@drawable/ic_nav_wifi"
-        android:title="WIFI" />
+        android:title="WiFi" />
     <item
         android:id="@+id/nav_help"
         android:icon="@drawable/ic_nav_help"
-        android:title="帮助" />
+        android:title="Help" />
 </menu>

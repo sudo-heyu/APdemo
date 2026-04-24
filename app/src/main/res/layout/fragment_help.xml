@@ -29,7 +29,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="无法后台运行？"
+                android:text="Cannot run in background?"
                 android:textColor="#333333"
                 android:textSize="16sp" />
 
@@ -65,7 +65,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="无法自动连接？"
+                android:text="Cannot auto-connect?"
                 android:textColor="#333333"
                 android:textSize="16sp" />
 
@@ -100,7 +100,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="查看漫游日志"
+                android:text="View Roaming Log"
                 android:textColor="#333333"
                 android:textSize="16sp" />
 

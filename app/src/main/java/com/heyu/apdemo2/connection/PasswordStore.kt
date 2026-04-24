@@ -3,8 +3,8 @@ package com.heyu.apdemo2.connection
 import android.content.Context
 
 /**
- * WiFi 密码本地存储（SharedPreferences）。
- * 以 SSID 为 key，仅存储加密网络密码。
+ * WiFi Password Local Storage (SharedPreferences).
+ * Uses SSID as key, only stores encrypted network passwords.
  */
 object PasswordStore {
 

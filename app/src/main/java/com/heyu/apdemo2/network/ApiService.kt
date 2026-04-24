@@ -40,36 +40,36 @@ class ApiService {
     }
 
     /**
-     * 获取单个 AP 的详细信息
+     * Get detailed information for a single AP
      */
     fun fetchApDetails(ip: String, port: Int, bssid: String, callback: Callback) {
         val url = "http://$ip:$port/api/ap_details"
         val jsonRequest = gson.toJson(mapOf("bssid" to bssid))
         val body = jsonRequest.toRequestBody(JSON)
-        
-        Log.d(DEBUG_TAG, ">>> [详情请求] URL: $url")
-        
+
+        Log.d(DEBUG_TAG, ">>> [Details Request] URL: $url")
+
         val request = Request.Builder().url(url).post(body).build()
 
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e(DEBUG_TAG, "!!! [详情失败]: ${e.message}")
-                callback.onError(e.message ?: "网络错误")
+                Log.e(DEBUG_TAG, "!!! [Details Failed]: ${e.message}")
+                callback.onError(e.message ?: "Network error")
             }
 
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     val bodyStr = it.body?.string()
-                    Log.d(DEBUG_TAG, "<<< [详情响应] 代码: ${it.code}, 内容: $bodyStr")
+                    Log.d(DEBUG_TAG, "<<< [Details Response] Code: ${it.code}, Content: $bodyStr")
                     if (it.isSuccessful && bodyStr != null) {
                         try {
                             val apDetail = gson.fromJson(bodyStr, ApDetailResponse::class.java)
                             callback.onSuccess(apDetail)
                         } catch (e: Exception) {
-                            callback.onError("解析失败")
+                            callback.onError("Parse failed")
                         }
                     } else {
-                        callback.onError("错误码: ${it.code}")
+                        callback.onError("Error code: ${it.code}")
                     }
                 }
             }
@@ -77,7 +77,7 @@ class ApiService {
     }
 
     /**
-     * 上传漫游算法日志到后端
+     * Upload roaming algorithm log to backend
      */
     fun uploadRoamingLog(ip: String, port: Int, logText: String, callback: SimpleCallback) {
         val url = "http://$ip:$port/api/roaming_log"
@@ -93,64 +93,64 @@ class ApiService {
 
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: Call, e: IOException) {
-                callback.onError(e.message ?: "网络错误")
+                callback.onError(e.message ?: "Network error")
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (it.isSuccessful) callback.onSuccess()
-                    else callback.onError("服务器错误: ${it.code}")
+                    else callback.onError("Server error: ${it.code}")
                 }
             }
         })
     }
 
     /**
-     * 批量上传 4 次扫描后的结果并接收评分
+     * Batch upload results after 4 scans and receive scores
      */
     fun uploadScanResults(ip: String, port: Int, accessPoints: List<AccessPoint>, callback: BatchCallback) {
         val url = "http://$ip:$port/api/upload_scan"
-        
+
         val ssidList = accessPoints.map { it.ssid }.filter { it.isNotBlank() }
-        
+
         val payload = mapOf(
             "ssids" to ssidList,
             "count" to ssidList.size,
             "device_model" to android.os.Build.MODEL
         )
-        
+
         val jsonRequest = gson.toJson(payload)
         val body = jsonRequest.toRequestBody(JSON)
-        
+
         Log.d(DEBUG_TAG, "========================================")
-        Log.d(DEBUG_TAG, ">>> [HTTP POST] 发起批量上传并请求评分")
-        Log.d(DEBUG_TAG, "目标地址: $url")
-        Log.d(DEBUG_TAG, "SSID 数量: ${ssidList.size}")
+        Log.d(DEBUG_TAG, ">>> [HTTP POST] Initiating batch upload and score request")
+        Log.d(DEBUG_TAG, "Target URL: $url")
+        Log.d(DEBUG_TAG, "SSID count: ${ssidList.size}")
         Log.d(DEBUG_TAG, "========================================")
-        
+
         val request = Request.Builder().url(url).post(body).build()
 
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e(DEBUG_TAG, "!!! [上传失败]: ${e.message}")
+                Log.e(DEBUG_TAG, "!!! [Upload Failed]: ${e.message}")
                 callback.onError(e.message ?: "Unknown Error")
             }
 
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     val respStr = it.body?.string()
-                    Log.d(DEBUG_TAG, "<<< [上传响应] 状态码: ${it.code}")
-                    Log.d(DEBUG_TAG, "服务器回应: $respStr")
-                    
+                    Log.d(DEBUG_TAG, "<<< [Upload Response] Status: ${it.code}")
+                    Log.d(DEBUG_TAG, "Server response: $respStr")
+
                     if (it.isSuccessful && respStr != null) {
                         try {
                             val scanResponse = gson.fromJson(respStr, ScanResponse::class.java)
                             callback.onSuccess(scanResponse)
                         } catch (e: Exception) {
-                            Log.e(DEBUG_TAG, "JSON解析失败: ${e.message}")
-                            callback.onError("数据格式解析失败")
+                            Log.e(DEBUG_TAG, "JSON parse failed: ${e.message}")
+                            callback.onError("Data format parse failed")
                         }
                     } else {
-                        callback.onError("服务器错误: ${it.code}")
+                        callback.onError("Server error: ${it.code}")
                     }
                 }
             }

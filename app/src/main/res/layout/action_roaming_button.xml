@@ -6,6 +6,6 @@
     android:background="@drawable/roaming_button_bg"
     android:paddingHorizontal="12dp"
     android:paddingVertical="6dp"
-    android:text="漫游"
+    android:text="Roaming"
     android:textColor="#2196F3"
     android:textSize="14sp" />

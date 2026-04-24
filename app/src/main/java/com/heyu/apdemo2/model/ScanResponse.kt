@@ -1,7 +1,7 @@
 package com.heyu.apdemo2.model
 
 /**
- * 扫描结果上传后的响应模型
+ * Scan result upload response model
  */
 data class ScanResponse(
     val results: List<ApScoreResult>?,
@@ -9,7 +9,7 @@ data class ScanResponse(
 )
 
 /**
- * 每个 SSID 的打分结果
+ * Score result for each SSID
  */
 data class ApScoreResult(
     val ssid: String,

@@ -38,10 +38,10 @@ class WifiFragment : Fragment() {
     private var wifiStateReceiver: BroadcastReceiver? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    // 当前正在连接的目标信息
+    // Current connecting target info
     private var connectingSsid: String? = null
     private var connectingPassword: String? = null
-    // 仅在"用户去开启无障碍服务"后置 true，onResume 消费一次后立即清除，防止 returnToApp 触发再次循环
+    // Only set true after user goes to enable accessibility service, cleared after onResume consumes once, preventing returnToApp from triggering loop again
     private var pendingA11yRetry: Boolean = false
     private var connectingTimeoutRunnable: Runnable? = null
 
@@ -56,7 +56,7 @@ class WifiFragment : Fragment() {
     val scanCallback = object : ScanForegroundService.ScanCallback {
         override fun onStatusUpdate(status: String) {
             activity?.runOnUiThread {
-                if (connectingSsid == null) tvStatus.text = "状态: $status"
+                if (connectingSsid == null) tvStatus.text = "Status: $status"
             }
         }
         override fun onDataUpdate(accessPoints: List<AccessPoint>) {
@@ -67,11 +67,11 @@ class WifiFragment : Fragment() {
                 if (success && ssid != null) {
                     cancelConnectingTimeout()
                     clearConnectingState()
-                    tvStatus.text = "状态: 已连接 $ssid"
+                    tvStatus.text = "Status: Connected to $ssid"
                     adapter.setPinned(ssid)
                 } else {
                     clearConnectingState()
-                    if (errorType.isNotEmpty()) tvStatus.text = "状态: 连接失败 - $errorType"
+                    if (errorType.isNotEmpty()) tvStatus.text = "Status: Connection failed - $errorType"
                     adapter.setPinned(null)
                 }
                 (activity as? MainActivity)?.getScanService()?.updateConnectedSsid(ssid)
@@ -79,16 +79,16 @@ class WifiFragment : Fragment() {
         }
         override fun onReconnecting(ssid: String, attempt: Int) {
             activity?.runOnUiThread {
-                tvStatus.text = "状态: 正在重新连接 $ssid（第 $attempt 次）..."
+                tvStatus.text = "Status: Reconnecting to $ssid (attempt $attempt)..."
             }
         }
         override fun onApprovalNeeded() {}
         override fun onRoamingStatus(status: String) {
-            // 漫游状态不再显示在状态栏，只记录到日志
+            // Roaming status no longer displayed in status bar, only logged
         }
     }
 
-    // ── 生命周期 ─────────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
@@ -112,16 +112,16 @@ class WifiFragment : Fragment() {
         }
         registerWifiStateReceiver()
 
-        // 从无障碍设置页返回时：pendingA11yRetry 消费一次后立即清除，防止后续 resume 重复触发
+        // When returning from accessibility settings: pendingA11yRetry consumed once then cleared immediately, preventing subsequent resume from triggering again
         if (pendingA11yRetry &&
             WifiAccessibilityService.isEnabled(requireContext()) &&
             WifiAccessibilityService.getInstance() != null
         ) {
             val pendingSsid = connectingSsid
             val pendingPwd  = connectingPassword
-            pendingA11yRetry = false          // 立即清除，避免循环
+            pendingA11yRetry = false          // Clear immediately to prevent loop
             if (pendingSsid != null && pendingPwd != null) {
-                Log.d(TAG, "从无障碍设置返回，重试连接: $pendingSsid")
+                Log.d(TAG, "Returning from accessibility settings, retrying connection: $pendingSsid")
                 clearConnectingState()
                 val isOpen = PasswordStore.get(requireContext(), pendingSsid) == null && pendingPwd.isEmpty()
                 initiateConnect(pendingSsid, isOpen, pendingPwd)
@@ -129,13 +129,13 @@ class WifiFragment : Fragment() {
             }
         }
 
-        // 用户从 WiFi 设置页手动返回但未连上目标网络：静默清除连接中状态
+        // User manually returned from WiFi settings but didn't connect to target network: silently clear connecting state
         if (connectingSsid != null && !pendingA11yRetry) {
             val systemSsid = getSystemConnectedSsid()
             if (systemSsid != connectingSsid) {
-                Log.d(TAG, "用户手动返回，未连接到目标 $connectingSsid，清除状态")
+                Log.d(TAG, "User manually returned, not connected to target $connectingSsid, clearing state")
                 clearConnectingState()
-                tvStatus.text = "状态: 未连接"
+                tvStatus.text = "Status: Not connected"
             }
         }
 
@@ -154,25 +154,25 @@ class WifiFragment : Fragment() {
         scanService = null
     }
 
-    // ── 供 MainActivity 调用 ──────────────────────────────────────────────────
+    // ── Called by MainActivity ──────────────────────────────────────────────────
 
     fun onServiceBound(service: ScanForegroundService) {
         scanService = service
         service.registerCallback(scanCallback)
         if (::adapter.isInitialized && connectingSsid == null) syncConnectedSsid()
-        Log.d(TAG, "服务已绑定")
+        Log.d(TAG, "Service bound")
     }
 
     fun onServiceUnbound() {
         scanService = null
-        Log.d(TAG, "服务已解绑")
+        Log.d(TAG, "Service unbound")
     }
 
-    // ── 系统 WiFi 状态同步 ────────────────────────────────────────────────────
+    // ── System WiFi State Sync ────────────────────────────────────────────────────
 
     private fun syncConnectedSsid() {
         if (connectingSsid != null) {
-            Log.d(TAG, "[syncConnectedSsid] 跳过：正在连接 $connectingSsid")
+            Log.d(TAG, "[syncConnectedSsid] Skipped: connecting to $connectingSsid")
             return
         }
 
@@ -184,11 +184,11 @@ class WifiFragment : Fragment() {
         adapter.setPinned(systemSsid)
 
         if (systemSsid != null) {
-            tvStatus.text = "状态: 已连接 $systemSsid"
+            tvStatus.text = "Status: Connected to $systemSsid"
         }
 
         service?.updateConnectedSsid(systemSsid)
-        Log.d(TAG, "[syncConnectedSsid] 同步WiFi状态到服务: $systemSsid")
+        Log.d(TAG, "[syncConnectedSsid] Synced WiFi state to service: $systemSsid")
     }
 
     @Suppress("DEPRECATION")
@@ -214,10 +214,10 @@ class WifiFragment : Fragment() {
                         val systemSsid = getSystemConnectedSsid()
                         val target = connectingSsid
                         if (target != null && systemSsid == target) {
-                            // 连上了我们想连的网络，立即更新状态
+                            // Connected to the network we wanted, update state immediately
                             cancelConnectingTimeout()
                             clearConnectingState()
-                            tvStatus.text = "状态: 已连接 $systemSsid"
+                            tvStatus.text = "Status: Connected to $systemSsid"
                             adapter.setPinned(systemSsid)
                             (activity as? MainActivity)?.getScanService()?.updateConnectedSsid(systemSsid)
                         } else if (target == null) {
@@ -245,19 +245,19 @@ class WifiFragment : Fragment() {
         wifiStateReceiver = null
     }
 
-    // ── WiFi 连接主流程 ───────────────────────────────────────────────────────
+    // ── WiFi Connection Main Flow ───────────────────────────────────────────────────────
 
     private fun handleApClick(ap: AccessPoint) {
         if (ap.ssid == adapter.pinnedSsid) {
             AlertDialog.Builder(requireContext())
-                .setTitle("断开连接")
-                .setMessage("断开到 ${ap.ssid} 的连接？")
-                .setPositiveButton("断开") { _, _ ->
+                .setTitle("Disconnect")
+                .setMessage("Disconnect from ${ap.ssid}?")
+                .setPositiveButton("Disconnect") { _, _ ->
                     (activity as? MainActivity)?.getScanService()?.disconnectPinned()
                     adapter.setPinned(null)
-                    tvStatus.text = "状态: 已断开"
+                    tvStatus.text = "Status: Disconnected"
                 }
-                .setNegativeButton("取消", null)
+                .setNegativeButton("Cancel", null)
                 .show()
             return
         }
@@ -276,30 +276,30 @@ class WifiFragment : Fragment() {
     }
 
     /**
-     * 检查无障碍服务是否已启用。
-     * - 已启用：直接发起连接
-     * - 未启用：弹窗引导用户开启，用户确认后跳转设置
+     * Check if accessibility service is enabled.
+     * - Enabled: initiate connection directly
+     * - Not enabled: show dialog to guide user to enable, jump to settings after confirmation
      */
     private fun checkA11yAndConnect(ssid: String, isOpen: Boolean, password: String) {
         if (WifiAccessibilityService.isEnabled(requireContext())) {
             initiateConnect(ssid, isOpen, password)
         } else {
             AlertDialog.Builder(requireContext())
-                .setTitle("需要开启无障碍服务")
+                .setTitle("Accessibility Service Required")
                 .setMessage(
-                    "APdemo2 需要无障碍服务权限才能实现真实 WiFi 切换（其他 App 如直播也跟随切换）。\n\n" +
-                    "请在「无障碍」→「已下载的应用」中找到「${getString(R.string.app_name)}」并开启。"
+                    "APdemo2 requires accessibility service permission to perform real WiFi switching (other apps like streaming also follow the switch).\n\n" +
+                    "Please find \"${getString(R.string.app_name)}\" in \"Accessibility\" → \"Downloaded apps\" and enable it."
                 )
-                .setPositiveButton("去开启") { _, _ ->
+                .setPositiveButton("Go to Settings") { _, _ ->
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     })
-                    // 记录待连接目标；pendingA11yRetry 在 onResume 中消费一次后立即清除
+                    // Record pending connection target; pendingA11yRetry consumed once in onResume then cleared immediately
                     connectingSsid = ssid
                     connectingPassword = password
                     pendingA11yRetry = true
                 }
-                .setNegativeButton("暂不（降级连接）") { _, _ ->
+                .setNegativeButton("Not Now (Fallback)") { _, _ ->
                     initiateConnect(ssid, isOpen, password)
                 }
                 .show()
@@ -316,33 +316,33 @@ class WifiFragment : Fragment() {
 
         val service = (activity as? MainActivity)?.getScanService()
         if (service == null) {
-            tvStatus.text = "状态: 服务未启动，无法连接"
+            tvStatus.text = "Status: Service not started, cannot connect"
             clearConnectingState()
             return
         }
 
-        tvStatus.text = "状态: 正在切换（无障碍）$ssid..."
+        tvStatus.text = "Status: Switching (accessibility) $ssid..."
 
-        // 让 service 准备无障碍服务目标（不打开 WiFi 设置页）
+        // Let service prepare accessibility service target (don't open WiFi settings page)
         service.connectToNetwork(ssid, isOpen, password)
 
-        // Fragment 自己打开 WiFi 设置页（同任务栈），确保一次 BACK 即可返回 App
+        // Fragment opens WiFi settings page itself (same task stack), ensuring one BACK returns to app
         startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
         scheduleConnectingTimeout(ssid)
     }
 
-    // ── 连接状态管理 ──────────────────────────────────────────────────────────
+    // ── Connection State Management ──────────────────────────────────────────────────────────
 
     private fun scheduleConnectingTimeout(targetSsid: String) {
         cancelConnectingTimeout()
         connectingTimeoutRunnable = Runnable {
             if (connectingSsid != targetSsid) return@Runnable
-            Log.w(TAG, "连接超时: $targetSsid")
+            Log.w(TAG, "Connection timeout: $targetSsid")
             if (getSystemConnectedSsid() == targetSsid) {
-                tvStatus.text = "状态: 已连接 $targetSsid"
+                tvStatus.text = "Status: Connected to $targetSsid"
                 adapter.setPinned(targetSsid)
             } else {
-                tvStatus.text = "状态: 连接超时，请重试"
+                tvStatus.text = "Status: Connection timeout, please retry"
             }
             clearConnectingState()
         }.also { mainHandler.postDelayed(it, CONNECT_TIMEOUT_MS) }
@@ -360,11 +360,11 @@ class WifiFragment : Fragment() {
         pendingA11yRetry = false
     }
 
-    // ── 密码输入弹窗 ──────────────────────────────────────────────────────────
+    // ── Password Input Dialog ──────────────────────────────────────────────────────────
 
     private fun showPasswordDialog(ap: AccessPoint) {
         val passwordInput = EditText(requireContext()).apply {
-            hint = "请输入 WiFi 密码"
+            hint = "Enter WiFi password"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         val container = LinearLayout(requireContext()).apply {
@@ -374,17 +374,17 @@ class WifiFragment : Fragment() {
         }
 
         AlertDialog.Builder(requireContext())
-            .setTitle("连接到 ${ap.ssid}")
+            .setTitle("Connect to ${ap.ssid}")
             .setView(container)
-            .setPositiveButton("连接") { _, _ ->
+            .setPositiveButton("Connect") { _, _ ->
                 val pwd = passwordInput.text.toString()
                 if (pwd.length < 8) {
-                    Toast.makeText(requireContext(), "密码至少 8 位", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "Password must be at least 8 characters", Toast.LENGTH_SHORT).show()
                 } else {
                     initiateConnect(ap.ssid, isOpen = false, password = pwd)
                 }
             }
-            .setNegativeButton("取消") { _, _ ->
+            .setNegativeButton("Cancel") { _, _ ->
                 if (adapter.pinnedSsid == ap.ssid) adapter.setPinned(null)
             }
             .show()

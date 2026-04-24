@@ -4,26 +4,26 @@
     <item
         android:id="@+id/action_roaming_log"
         android:icon="@drawable/ic_roaming_log"
-        android:title="漫游日志"
+        android:title="Roaming Log"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_auto_roaming"
         android:checkable="true"
         android:checked="false"
-        android:title="漫游"
+        android:title="Roaming"
         app:actionLayout="@layout/action_roaming_button"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_settings"
         android:icon="@android:drawable/ic_menu_manage"
-        android:title="服务器设置"
+        android:title="Server Settings"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_request_scores"
-        android:title="请求评分"
+        android:title="Request Scores"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_export_log"
-        android:title="导出日志"
+        android:title="Export Log"
         app:showAsAction="never" />
 </menu>

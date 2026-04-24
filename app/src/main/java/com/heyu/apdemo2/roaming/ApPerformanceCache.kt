@@ -11,23 +11,24 @@ import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * AP 性能历史记录
+ * AP Performance History Record
  *
- * 本地缓存用户实际连接过的 AP 的性能数据，用于辅助选网决策
+ * Local cache of performance data for APs user has actually connected to,
+ * used to assist network selection decisions
  */
 @Serializable
 data class ApPerformanceRecord(
     val ssid: String,
     val rssi: Int,
     val timestamp: Long,
-    val rxSpeedKbps: Float,      // 接收速率 KB/s
-    val txSpeedKbps: Float,      // 发送速率 KB/s
-    val latencyMs: Float?,       // ping 延迟 ms
-    val isConnected: Boolean     // 当时是否真正有数据传输
+    val rxSpeedKbps: Float,      // Receive rate KB/s
+    val txSpeedKbps: Float,      // Transmit rate KB/s
+    val latencyMs: Float?,       // Ping latency ms
+    val isConnected: Boolean     // Whether there was actual data transfer at that time
 )
 
 /**
- * AP 性能统计摘要
+ * AP Performance Statistics Summary
  */
 data class ApPerformanceSummary(
     val ssid: String,
@@ -39,12 +40,12 @@ data class ApPerformanceSummary(
     val lastSeen: Long
 ) {
     /**
-     * 综合性能评分 (0-100)
-     * 基于历史吞吐量、延迟、信号强度计算
+     * Comprehensive performance score (0-100)
+     * Calculated based on historical throughput, latency, signal strength
      */
     fun calculateScore(): Float {
-        // 吞吐量权重 40%，延迟权重 30%，RSSI 权重 30%
-        val throughputScore = (avgRxSpeed + avgTxSpeed).coerceIn(0f, 2000f) / 20f  // 假设 2000KB/s = 100分
+        // Throughput weight 40%, latency weight 30%, RSSI weight 30%
+        val throughputScore = (avgRxSpeed + avgTxSpeed).coerceIn(0f, 2000f) / 20f  // Assume 2000KB/s = 100 points
 
         val latencyScore = avgLatency?.let { lat ->
             when {
@@ -54,7 +55,7 @@ data class ApPerformanceSummary(
                 lat < 200 -> 40f
                 else -> 20f
             }
-        } ?: 50f  // 无延迟数据给中等分
+        } ?: 50f  // Medium score for no latency data
 
         val rssiScore = when {
             avgRssi > -50 -> 100f
@@ -69,19 +70,19 @@ data class ApPerformanceSummary(
 }
 
 /**
- * AP 性能缓存管理器
+ * AP Performance Cache Manager
  *
- * 自动采样当前连接 AP 的性能，存储历史数据
+ * Automatically samples performance of currently connected AP, stores historical data
  */
 class ApPerformanceCache private constructor(context: Context) {
 
     companion object {
         private const val TAG = "[ApPerformanceCache]"
         private const val PREFS_NAME = "ap_performance_cache"
-        private const val MAX_RECORDS_PER_AP = 100     // 每个 AP 最多保留记录数
-        private const val RECORD_EXPIRY_DAYS = 30      // 记录过期时间（天）
-        private const val SAMPLE_INTERVAL_MS = 5000L   // 采样间隔 5 秒
-        private const val MIN_DATA_THRESHOLD = 1024L   // 最小数据变化阈值 1KB
+        private const val MAX_RECORDS_PER_AP = 100     // Max records to keep per AP
+        private const val RECORD_EXPIRY_DAYS = 30      // Record expiry time (days)
+        private const val SAMPLE_INTERVAL_MS = 5000L   // Sampling interval 5 seconds
+        private const val MIN_DATA_THRESHOLD = 1024L   // Minimum data change threshold 1KB
 
         @Volatile
         private var instance: ApPerformanceCache? = null
@@ -98,10 +99,10 @@ class ApPerformanceCache private constructor(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
-    // 内存缓存
+    // Memory cache
     private val memoryCache = ConcurrentHashMap<String, MutableList<ApPerformanceRecord>>()
 
-    // 采样状态
+    // Sampling state
     private var lastSampleTime = 0L
     private var lastRxBytes = 0L
     private var lastTxBytes = 0L
@@ -113,7 +114,7 @@ class ApPerformanceCache private constructor(context: Context) {
     }
 
     /**
-     * 开始监控指定 AP 的性能
+     * Start monitoring specified AP's performance
      */
     fun startMonitoring(ssid: String, rssi: Int) {
         currentSsid = ssid
@@ -121,35 +122,35 @@ class ApPerformanceCache private constructor(context: Context) {
         lastSampleTime = System.currentTimeMillis()
         lastRxBytes = TrafficStats.getTotalRxBytes()
         lastTxBytes = TrafficStats.getTotalTxBytes()
-        Log.d(TAG, "开始监控 AP: $ssid, RSSI: $rssi")
+        Log.d(TAG, "Started monitoring AP: $ssid, RSSI: $rssi")
     }
 
     /**
-     * 停止监控
+     * Stop monitoring
      */
     fun stopMonitoring() {
         currentSsid?.let {
-            Log.d(TAG, "停止监控 AP: $it")
+            Log.d(TAG, "Stopped monitoring AP: $it")
         }
         currentSsid = null
         lastSampleTime = 0L
     }
 
     /**
-     * 更新当前 RSSI（AP 切换或信号变化时调用）
+     * Update current RSSI (called on AP switch or signal change)
      */
     fun updateRssi(rssi: Int) {
         currentRssi = rssi
     }
 
     /**
-     * 采样当前性能（应在后台线程定期调用）
+     * Sample current performance (should be called periodically in background thread)
      */
     fun sample(): ApPerformanceRecord? {
         val ssid = currentSsid ?: return null
         val now = System.currentTimeMillis()
 
-        // 检查采样间隔
+        // Check sampling interval
         if (now - lastSampleTime < SAMPLE_INTERVAL_MS) {
             return null
         }
@@ -158,16 +159,16 @@ class ApPerformanceCache private constructor(context: Context) {
         val currentTx = TrafficStats.getTotalTxBytes()
         val elapsedSec = (now - lastSampleTime) / 1000f
 
-        // 计算速率
+        // Calculate rates
         val rxDiff = currentRx - lastRxBytes
         val txDiff = currentTx - lastTxBytes
         val rxSpeed = if (elapsedSec > 0) (rxDiff / 1024f / elapsedSec) else 0f  // KB/s
         val txSpeed = if (elapsedSec > 0) (txDiff / 1024f / elapsedSec) else 0f
 
-        // 判断是否有有效数据传输
+        // Determine if there's valid data transfer
         val isEffectivelyConnected = rxDiff > MIN_DATA_THRESHOLD || txDiff > MIN_DATA_THRESHOLD
 
-        // 测量延迟（可选，异步执行）
+        // Measure latency (optional, executed asynchronously)
         val latency = measureLatencyAsync()
 
         val record = ApPerformanceRecord(
@@ -180,22 +181,22 @@ class ApPerformanceCache private constructor(context: Context) {
             isConnected = isEffectivelyConnected
         )
 
-        // 保存记录
+        // Save record
         addRecord(ssid, record)
 
-        // 更新状态
+        // Update state
         lastSampleTime = now
         lastRxBytes = currentRx
         lastTxBytes = currentTx
 
-        Log.v(TAG, "采样 $ssid: rx=${rxSpeed.toInt()}KB/s, tx=${txSpeed.toInt()}KB/s, " +
+        Log.v(TAG, "Sampled $ssid: rx=${rxSpeed.toInt()}KB/s, tx=${txSpeed.toInt()}KB/s, " +
                 "latency=${latency?.toInt() ?: "N/A"}ms, connected=$isEffectivelyConnected")
 
         return record
     }
 
     /**
-     * 获取指定 AP 的性能统计
+     * Get performance statistics for specified AP
      */
     fun getPerformanceSummary(ssid: String): ApPerformanceSummary? {
         val records = memoryCache[ssid]?.filter { !isExpired(it.timestamp) }
@@ -218,7 +219,7 @@ class ApPerformanceCache private constructor(context: Context) {
     }
 
     /**
-     * 获取所有已知 AP 的性能评分
+     * Get performance scores for all known APs
      */
     fun getAllPerformanceScores(): Map<String, Float> {
         return memoryCache.keys.mapNotNull { ssid ->
@@ -229,30 +230,30 @@ class ApPerformanceCache private constructor(context: Context) {
     }
 
     /**
-     * 检查是否有某个 AP 的历史性能数据
+     * Check if there's historical performance data for an AP
      */
     fun hasPerformanceData(ssid: String): Boolean {
         return memoryCache[ssid]?.any { !isExpired(it.timestamp) } ?: false
     }
 
     /**
-     * 获取 AP 的连接状态（基于历史数据）
+     * Get AP connection status (based on historical data)
      */
     fun isLikelyConnectable(ssid: String): Boolean {
-        // 当前正在监控的 AP（已连接）直接返回 true
+        // Currently monitored AP (connected) returns true directly
         if (ssid == currentSsid) return true
 
         val records = memoryCache[ssid] ?: return false
         val recentRecords = records.filter { !isExpired(it.timestamp) }
         if (recentRecords.isEmpty()) return false
 
-        // 如果最近 50% 的采样显示有数据传输，则认为可连接
+        // If recent 50% of samples show data transfer, consider connectable
         val connectedRatio = recentRecords.count { it.isConnected }.toFloat() / recentRecords.size
         return connectedRatio > 0.5f
     }
 
     /**
-     * 清理过期数据
+     * Clean up expired data
      */
     fun cleanupExpired() {
         val expiryTime = System.currentTimeMillis() - (RECORD_EXPIRY_DAYS * 24 * 60 * 60 * 1000)
@@ -264,51 +265,51 @@ class ApPerformanceCache private constructor(context: Context) {
             }
         }
 
-        // 移除空列表
+        // Remove empty lists
         memoryCache.entries.removeIf { it.value.isEmpty() }
 
         saveToDisk()
-        Log.d(TAG, "清理过期数据完成")
+        Log.d(TAG, "Expired data cleanup complete")
     }
 
     /**
-     * 清除所有缓存
+     * Clear all cache
      */
     fun clearAll() {
         memoryCache.clear()
         prefs.edit().clear().apply()
-        Log.d(TAG, "清除所有缓存")
+        Log.d(TAG, "All cache cleared")
     }
 
     /**
-     * 获取缓存统计信息
+     * Get cache statistics
      */
     fun getCacheStats(): String {
         val totalAps = memoryCache.size
         val totalRecords = memoryCache.values.sumOf { it.size }
-        return "AP数量: $totalAps, 总记录: $totalRecords"
+        return "AP count: $totalAps, Total records: $totalRecords"
     }
 
-    // ---------- 私有方法 ----------
+    // ---------- Private Methods ----------
 
     private fun addRecord(ssid: String, record: ApPerformanceRecord) {
         val list = memoryCache.getOrPut(ssid) { mutableListOf() }
         list.add(record)
 
-        // 限制每个 AP 的记录数，保留最新的
+        // Limit records per AP, keep newest
         if (list.size > MAX_RECORDS_PER_AP) {
             list.removeAt(0)
         }
 
-        // 定期保存到磁盘（每 10 条记录保存一次）
+        // Periodically save to disk (every 10 records)
         if (list.size % 10 == 0) {
             saveToDisk()
         }
     }
 
     private fun measureLatencyAsync(): Float? {
-        // 简单实现：ping 网关（可能不准确，需要异步优化）
-        // 实际生产环境建议使用更好的延迟测量方式
+        // Simple implementation: ping gateway (may be inaccurate, needs async optimization)
+        // Production environments should use better latency measurement
         return try {
             val start = System.currentTimeMillis()
             val reachable = InetAddress.getByName("223.5.5.5").isReachable(1000)
@@ -331,9 +332,9 @@ class ApPerformanceCache private constructor(context: Context) {
             loaded.forEach { (ssid, records) ->
                 memoryCache[ssid] = records.toMutableList()
             }
-            Log.d(TAG, "从磁盘加载 ${memoryCache.size} 个 AP 的数据")
+            Log.d(TAG, "Loaded data for ${memoryCache.size} APs from disk")
         } catch (e: Exception) {
-            Log.e(TAG, "加载缓存失败: ${e.message}")
+            Log.e(TAG, "Failed to load cache: ${e.message}")
         }
     }
 
@@ -343,7 +344,7 @@ class ApPerformanceCache private constructor(context: Context) {
             val jsonStr = json.encodeToString(toSave)
             prefs.edit().putString("performance_cache", jsonStr).apply()
         } catch (e: Exception) {
-            Log.e(TAG, "保存缓存失败: ${e.message}")
+            Log.e(TAG, "Failed to save cache: ${e.message}")
         }
     }
 }

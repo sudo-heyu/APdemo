@@ -8,8 +8,8 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 漫游算法执行日志管理器
- * 记录漫游算法的详细执行过程，便于调试
+ * Roaming Algorithm Execution Log Manager
+ * Records detailed execution process of roaming algorithm for debugging
  */
 class RoamingLogManager private constructor(context: Context) {
 
@@ -20,8 +20,8 @@ class RoamingLogManager private constructor(context: Context) {
     companion object {
         private const val TAG = "[RoamingLog]"
         private const val LOG_FILE_NAME = "roaming_algorithm.log"
-        private const val MAX_LINES = 500 // 内存最多保留行数
-        private const val TRIM_TO = 350   // 超限后裁剪到此行数（保留最新）
+        private const val MAX_LINES = 500 // Max lines to keep in memory
+        private const val TRIM_TO = 350   // Trim to this line count when exceeded (keep newest)
 
         @Volatile
         private var instance: RoamingLogManager? = null
@@ -39,14 +39,14 @@ class RoamingLogManager private constructor(context: Context) {
     private val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val listeners = mutableListOf<OnLogListener>()
 
-    // 内存日志缓冲（有序，最新在末尾）
+    // Memory log buffer (ordered, newest at end)
     private val logLines = mutableListOf<String>()
 
     init {
         if (!logFile.exists()) {
             logFile.createNewFile()
         }
-        // 启动时从文件加载最近日志
+        // Load recent logs from file at startup
         try {
             if (logFile.exists()) {
                 val lines = logFile.readLines().filter { it.isNotBlank() }
@@ -64,13 +64,13 @@ class RoamingLogManager private constructor(context: Context) {
     }
 
     /**
-     * 记录日志
+     * Record log
      */
     fun log(level: String, message: String) {
         val timestamp = dateFormat.format(Date())
         val logLine = "[$timestamp] $message"
 
-        // 同时输出到Logcat
+        // Also output to Logcat
         when (level) {
             "D" -> Log.d(TAG, message)
             "I" -> Log.i(TAG, message)
@@ -79,7 +79,7 @@ class RoamingLogManager private constructor(context: Context) {
             else -> Log.d(TAG, message)
         }
 
-        // 追加到内存缓冲
+        // Append to memory buffer
         synchronized(logLines) {
             logLines.add(logLine)
             if (logLines.size > MAX_LINES) {
@@ -88,20 +88,20 @@ class RoamingLogManager private constructor(context: Context) {
             }
         }
 
-        // 写入文件
+        // Write to file
         try {
             logFile.appendText(logLine + "\n")
-            // 文件超限时重写为内存中的内容
+            // Rewrite with memory contents when file exceeds limit
             if (logFile.length() > 512 * 1024L) {
                 synchronized(logLines) {
                     logFile.writeText(logLines.joinToString("\n") + "\n")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "写入日志失败: ${e.message}")
+            Log.e(TAG, "Failed to write log: ${e.message}")
         }
 
-        // 通知监听器
+        // Notify listeners
         synchronized(listeners) {
             listeners.forEach { it.onNewLog(logLine) }
         }
@@ -112,35 +112,35 @@ class RoamingLogManager private constructor(context: Context) {
     fun w(message: String) = log("W", message)
     fun e(message: String) = log("E", message)
 
-    /** 带颜色的阶段标签，用于 WebView 渲染 */
+    /** Colored phase tag for WebView rendering */
     fun phase(tag: String, color: String, message: String) {
         log("I", "<span style='background:$color;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold'>$tag</span> $message")
     }
 
     /**
-     * 获取日志内容（正序，最新在末尾）
+     * Get log content (in order, newest at end)
      */
     fun getLogs(): String {
         return synchronized(logLines) {
-            if (logLines.isEmpty()) "暂无日志"
+            if (logLines.isEmpty()) "No logs available"
             else logLines.joinToString("\n")
         }
     }
 
     /**
-     * 清空日志
+     * Clear logs
      */
     fun clearLogs() {
         synchronized(logLines) { logLines.clear() }
         try {
             logFile.writeText("")
         } catch (e: Exception) {
-            Log.e(TAG, "清空日志失败: ${e.message}")
+            Log.e(TAG, "Failed to clear logs: ${e.message}")
         }
     }
 
     /**
-     * 获取日志文件大小
+     * Get log file size
      */
     fun getLogSize(): Long {
         return if (logFile.exists()) logFile.length() else 0

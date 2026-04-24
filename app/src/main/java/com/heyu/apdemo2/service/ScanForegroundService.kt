@@ -57,11 +57,11 @@ class ScanForegroundService : Service() {
     private var pinnedPassword: String = ""
     private var pinnedIsOpen: Boolean = false
 
-    // 独立后台线程：所有调度、扫描回调都在这个线程，与主线程完全解耦
+    // Independent background thread: all scheduling and scan callbacks run on this thread, completely decoupled from the main thread
     private val handlerThread = HandlerThread("ScanServiceThread")
     private lateinit var handler: Handler
 
-    // WakeLock：防止 CPU 进入休眠，确保 HandlerThread 的定时任务按时执行
+    // WakeLock: prevents CPU from sleeping, ensuring HandlerThread's scheduled tasks execute on time
     private lateinit var wakeLock: PowerManager.WakeLock
 
     var scanInterval: Long = 35000L
@@ -77,20 +77,20 @@ class ScanForegroundService : Service() {
         private set
     var roamingMode: RoamingMode = RoamingMode.ML
         private set
-    var roamingCooldown: Long = 5000L  // 切换冷却期，默认5秒
+    var roamingCooldown: Long = 5000L  // Switch cooldown period, default 5 seconds
         private set
 
-    /** 上次漫游切换成功的时间戳（毫秒），用于冷却期检查 */
+    /** Timestamp of last successful roaming switch (milliseconds), used for cooldown check */
     private var lastRoamingSwitchTime: Long = 0L
 
     var currentAccessPoints: List<AccessPoint> = emptyList()
         private set
-    var currentStatus: String = "准备就绪"
+    var currentStatus: String = "Ready"
         private set
     var currentConnectedSsid: String? = null
         private set
 
-    /** 用户正在手动连接时为 true，此时跳过自动漫游 */
+    /** True when user is manually connecting, auto-roaming is skipped during this time */
     private var isUserConnecting: Boolean = false
 
     companion object {
@@ -100,11 +100,11 @@ class ScanForegroundService : Service() {
         const val EXTRA_IP = "server_ip"
         const val EXTRA_PORT = "server_port"
         const val EXTRA_SCAN_INTERVAL = "scan_interval"
-        // AlarmManager 唤醒下一轮扫描的 Action
+        // AlarmManager action to wake up next scan cycle
         const val ACTION_NEXT_CYCLE = "com.heyu.apdemo2.ACTION_NEXT_CYCLE"
-        // SharedPreferences 与 MainActivity 共用同一个文件
+        // SharedPreferences shares the same file with MainActivity
         private const val PREFS_NAME = "server_settings"
-        // AP 保护生命期：弱信号 AP 至少保留的时间（毫秒）
+        // AP protection lifetime: minimum retention time for weak signal APs (milliseconds)
         private const val AP_LIFETIME_MS = 20_000L
     }
 
@@ -112,49 +112,49 @@ class ScanForegroundService : Service() {
         super.onCreate()
 
         roamingLogManager = RoamingLogManager.getInstance(this)
-        roamingLogManager.i("【服务启动】ScanForegroundService 已创建")
+        roamingLogManager.i("[Service Started] ScanForegroundService created")
 
         handlerThread.start()
         handler = Handler(handlerThread.looper)
 
-        // 2. 准备 PARTIAL_WAKE_LOCK，仅在扫描+上传期间按需持有，等待阶段释放以节省电量
+        // 2. Prepare PARTIAL_WAKE_LOCK, held on-demand during scan+upload, released during waiting to save battery
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "APdemo2:ScanWakeLock")
 
-        // 3. WifiScanner 传入 HandlerThread 的 Looper
+        // 3. Pass HandlerThread's Looper to WifiScanner
         wifiScanner = WifiScanner(this, handlerThread.looper)
         apSelectionManager = ApSelectionManager(this)
 
         createNotificationChannel()
-        startForegroundCompat("等待配置...")
-        Log.d(TAG, "服务已创建（HandlerThread + WifiScanner(HandlerThread looper) + WakeLock）")
+        startForegroundCompat("Waiting for configuration...")
+        Log.d(TAG, "Service created (HandlerThread + WifiScanner(HandlerThread looper) + WakeLock)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when {
             intent?.action == ACTION_NEXT_CYCLE -> {
-                // AlarmManager 唤醒后触发下一次扫描
-                Log.d(TAG, "AlarmManager 触发扫描")
+                // Triggered by AlarmManager for next scan
+                Log.d(TAG, "AlarmManager triggered scan")
                 if (isRunning) {
                     acquireWakeLock()
                     handler.post { executeSingleScan() }
                 }
             }
             intent != null -> {
-                // 正常启动：从 Intent 读取配置，并同步写入 SharedPreferences
+                // Normal startup: read config from Intent and persist to SharedPreferences
                 serverIp   = intent.getStringExtra(EXTRA_IP)
                 serverPort = intent.getIntExtra(EXTRA_PORT, -1)
                 scanInterval = intent.getLongExtra(EXTRA_SCAN_INTERVAL, 35000L)
                 persistConfig()
-                Log.d(TAG, "收到配置: ip=$serverIp port=$serverPort scanInterval=${scanInterval}ms")
-                // 无论是否已在运行，都立即触发扫描+上报，确保打开APP后立刻同步后端
+                Log.d(TAG, "Received config: ip=$serverIp port=$serverPort scanInterval=${scanInterval}ms")
+                // Trigger scan+upload immediately regardless of running state, ensuring sync with backend when app opens
                 acquireWakeLock()
                 startScanLoop()
             }
             else -> {
-                // START_STICKY 重启：intent 为 null，从持久化存储恢复配置
+                // START_STICKY restart: intent is null, restore config from persistent storage
                 restoreConfig()
-                Log.d(TAG, "服务重启（intent=null），恢复配置: ip=$serverIp port=$serverPort")
+                Log.d(TAG, "Service restarted (intent=null), restored config: ip=$serverIp port=$serverPort")
                 if (!isRunning) {
                     acquireWakeLock()
                     startScanLoop()
@@ -177,35 +177,36 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 手动连接：准备无障碍服务目标，但不打开 WiFi 设置页（由调用方 Fragment 负责打开，
-     * 保证同任务栈，一次 BACK 即可返回 App）。
+     * Manual connection: prepare accessibility service target, but don't open WiFi settings page
+     * (the calling Fragment is responsible for opening it, ensuring same task stack,
+     * so one BACK returns to the app).
      */
     fun connectToNetwork(ssid: String, isOpen: Boolean, password: String) {
         pinnedPassword = password
         pinnedIsOpen = isOpen
-        isUserConnecting = true  // 标记用户正在连接
+        isUserConnecting = true  // Mark user is connecting
 
         val a11y = WifiAccessibilityService.getInstance()
         if (a11y == null) {
-            roamingLogManager.w("【连接失败】无障碍服务未启用，请在系统设置中开启")
+            roamingLogManager.w("[Connection Failed] Accessibility service not enabled, please enable in system settings")
             isUserConnecting = false
-            callback?.onConnectionChanged(null, false, "请先在系统设置中启用无障碍服务")
+            callback?.onConnectionChanged(null, false, "Please enable accessibility service in system settings first")
             return
         }
 
         a11y.cancel()
-        roamingLogManager.i("【连接】准备无障碍连接（等待 Fragment 打开 WiFi 设置）: $ssid")
+        roamingLogManager.i("[Connection] Preparing accessibility connection (waiting for Fragment to open WiFi settings): $ssid")
         a11y.prepareManualConnect(ssid, password, isOpen, object : WifiAccessibilityService.ConnectionCallback {
             override fun onConnected(connectedSsid: String) {
-                isUserConnecting = false  // 清除标记
+                isUserConnecting = false  // Clear mark
                 pinnedSsid = connectedSsid
                 currentConnectedSsid = connectedSsid
-                Log.d(TAG, "无障碍服务连接成功: $connectedSsid")
+                Log.d(TAG, "Accessibility service connection successful: $connectedSsid")
                 callback?.onConnectionChanged(connectedSsid, true)
             }
             override fun onFailed(failedSsid: String, reason: String) {
-                isUserConnecting = false  // 清除标记
-                Log.w(TAG, "无障碍服务连接失败: $reason")
+                isUserConnecting = false  // Clear mark
+                Log.w(TAG, "Accessibility service connection failed: $reason")
                 if (pinnedSsid == ssid) pinnedSsid = null
                 callback?.onConnectionChanged(null, false, reason)
             }
@@ -213,8 +214,8 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 取消当前连接操作并清除本地状态。
-     * 无障碍服务为真实系统连接，无法通过代码强制断开，只清除本地状态。
+     * Cancel current connection operation and clear local state.
+     * Accessibility service performs real system connection, cannot be forcibly disconnected by code, only clear local state.
      */
     fun disconnectPinned() {
         WifiAccessibilityService.getInstance()?.cancel()
@@ -232,7 +233,7 @@ class ScanForegroundService : Service() {
         startScanLoop()
     }
 
-    // ── 配置持久化 ───────────────────────────────────────────────────────────
+    // ── Configuration Persistence ───────────────────────────────────────────────────────────
 
     private fun persistConfig() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
@@ -250,7 +251,7 @@ class ScanForegroundService : Service() {
         roamingCooldown = prefs.getLong("roaming_cooldown", 5000L)
     }
 
-    // ── 用户主动请求评分 ──────────────────────────────────────────────────────────
+    // ── User-initiated Score Request ──────────────────────────────────────────────────────────
 
     fun requestScores() {
         handler.post { queryScoresOnly() }
@@ -259,17 +260,17 @@ class ScanForegroundService : Service() {
     private fun queryScoresOnly() {
         val ip = serverIp
         if (ip == null || serverPort == -1) {
-            Log.w(TAG, "请求评分跳过: 服务器未配置 (ip=$ip, port=$serverPort)")
-            callback?.onStatusUpdate("评分失败: 服务器未配置")
+            Log.w(TAG, "Score request skipped: server not configured (ip=$ip, port=$serverPort)")
+            callback?.onStatusUpdate("Score request failed: server not configured")
             return
         }
         if (currentAccessPoints.isEmpty()) {
-            Log.w(TAG, "请求评分跳过: 无扫描数据")
-            callback?.onStatusUpdate("评分失败: 暂无扫描数据")
+            Log.w(TAG, "Score request skipped: no scan data")
+            callback?.onStatusUpdate("Score request failed: no scan data available")
             return
         }
 
-        Log.d(TAG, "请求评分: ip=$ip port=$serverPort AP数=${currentAccessPoints.size}")
+        Log.d(TAG, "Requesting scores: ip=$ip port=$serverPort AP count=${currentAccessPoints.size}")
         apiService.uploadScanResults(ip, serverPort, currentAccessPoints, object : ApiService.BatchCallback {
             override fun onSuccess(response: ScanResponse) {
                 handler.post {
@@ -278,18 +279,18 @@ class ScanForegroundService : Service() {
             }
             override fun onError(error: String) {
                 handler.post {
-                    Log.e(TAG, "请求评分失败: $error")
-                    callback?.onStatusUpdate("评分失败: $error")
+                    Log.e(TAG, "Score request failed: $error")
+                    callback?.onStatusUpdate("Score request failed: $error")
                     if (autoRoamingEnabled) evaluateAndTriggerRoaming()
                 }
             }
         })
     }
 
-    // ── 扫描主流程（全部在 HandlerThread 执行）──────────────────────────────
+    // ── Main Scan Flow (all executed in HandlerThread) ──────────────────────────────
 
     private fun startScanLoop() {
-        Log.d(TAG, ">>> [startScanLoop] 启动扫描循环，间隔=${scanInterval}ms")
+        Log.d(TAG, ">>> [startScanLoop] Starting scan loop, interval=${scanInterval}ms")
         isRunning = true
         handler.removeCallbacksAndMessages(null)
         cancelNextCycleAlarm()
@@ -299,26 +300,26 @@ class ScanForegroundService : Service() {
 
     private fun executeSingleScan() {
         if (!isRunning) return
-        updateStatus("正在扫描...")
-        Log.d(TAG, ">>> 开始单次扫描")
-        roamingLogManager.i("【开始扫描】")
+        updateStatus("Scanning...")
+        Log.d(TAG, ">>> Starting single scan")
+        roamingLogManager.i("[Scan Started]")
 
         wifiScanner.startScan(
             onSuccess = { accessPoints ->
                 if (!isRunning) return@startScan
-                // 使用带保护机制的合并逻辑
+                // Use merge logic with protection mechanism
                 currentAccessPoints = mergeScanResults(accessPoints)
                 restoreCachedScores()
                 callback?.onDataUpdate(currentAccessPoints)
-                roamingLogManager.i("扫描完成: ${accessPoints.size}个AP, 列表保留: ${currentAccessPoints.size}个")
+                roamingLogManager.i("Scan complete: ${accessPoints.size} APs, list retained: ${currentAccessPoints.size} APs")
                 if (autoRoamingEnabled) evaluateAndTriggerRoaming()
-                scheduleNextScan("就绪")
+                scheduleNextScan("Ready")
             },
             onError = { err ->
                 if (!isRunning) return@startScan
-                Log.e(TAG, "扫描失败: $err")
-                roamingLogManager.e("【扫描失败】$err")
-                scheduleNextScan("扫描失败")
+                Log.e(TAG, "Scan failed: $err")
+                roamingLogManager.e("[Scan Failed] $err")
+                scheduleNextScan("Scan failed")
             }
         )
     }
@@ -327,24 +328,24 @@ class ScanForegroundService : Service() {
         val ip = serverIp
         if (ip == null || serverPort == -1) {
             if (autoRoamingEnabled) evaluateAndTriggerRoaming()
-            scheduleNextScan("服务器未配置")
+            scheduleNextScan("Server not configured")
             return
         }
 
-        updateStatus("正在同步评分...")
+        updateStatus("Syncing scores...")
         apiService.uploadScanResults(ip, serverPort, accessPoints, object : ApiService.BatchCallback {
             override fun onSuccess(response: ScanResponse) {
                 handler.post {
                     if (!isRunning) return@post
                     updateScoresFromResponse(response)
-                    scheduleNextScan("就绪")
+                    scheduleNextScan("Ready")
                 }
             }
             override fun onError(error: String) {
                 handler.post {
                     if (!isRunning) return@post
                     if (autoRoamingEnabled) evaluateAndTriggerRoaming()
-                    scheduleNextScan("同步失败")
+                    scheduleNextScan("Sync failed")
                 }
             }
         })
@@ -352,17 +353,17 @@ class ScanForegroundService : Service() {
 
     private fun scheduleNextScan(status: String) {
         if (!isRunning) return
-        val msg = "$status (${scanInterval / 1000}s 后扫描)"
+        val msg = "$status (scan in ${scanInterval / 1000}s)"
         updateStatus(msg)
-        Log.d(TAG, ">>> 下次扫描在 ${scanInterval / 1000}s 后")
+        Log.d(TAG, ">>> Next scan in ${scanInterval / 1000}s")
 
-        // AlarmManager 确保 Doze 期间也能唤醒
+        // AlarmManager ensures wake up even during Doze mode
         scheduleNextCycleAlarm(scanInterval)
         releaseWakeLock()
     }
 
     /**
-     * 从 ApSelectionManager 缓存恢复评分到新扫描的 AccessPoint 对象
+     * Restore cached scores from ApSelectionManager to newly scanned AccessPoint objects
      */
     private fun restoreCachedScores() {
         currentAccessPoints.forEach { ap ->
@@ -376,20 +377,20 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 合并扫描结果：实现弱信号 AP 保护机制
-     * - 新扫描到的 AP：添加到列表，记录当前时间
-     * - 已存在的 AP：更新信息（信号强度等），刷新时间
-     * - 未扫到的 AP：检查是否超过生命期，超过则移除，否则保留
+     * Merge scan results: implements weak signal AP protection mechanism
+     * - Newly scanned APs: add to list, record current time
+     * - Existing APs: update info (signal strength, etc.), refresh time
+     * - APs not scanned: check if beyond lifetime, remove if so, otherwise keep
      */
     private fun mergeScanResults(newAps: List<AccessPoint>): List<AccessPoint> {
         val now = System.currentTimeMillis()
         val result = mutableListOf<AccessPoint>()
 
-        // 1. 处理新扫描到的 AP
+        // 1. Process newly scanned APs
         newAps.forEach { newAp ->
             val existing = currentAccessPoints.find { it.ssid == newAp.ssid }
             if (existing != null) {
-                // 已存在：创建更新后的对象，保留评分
+                // Already exists: create updated object, preserve score
                 result.add(existing.copy(
                     bssid = newAp.bssid,
                     rssi = newAp.rssi,
@@ -398,23 +399,23 @@ class ScanForegroundService : Service() {
                     lastSeenTime = now
                 ))
             } else {
-                // 新 AP：设置时间戳
+                // New AP: set timestamp
                 newAp.lastSeenTime = now
                 result.add(newAp)
             }
         }
 
-        // 2. 检查未扫到的 AP：在保护期内则保留
+        // 2. Check APs not scanned: keep if within protection period
         currentAccessPoints.forEach { oldAp ->
             if (result.none { it.ssid == oldAp.ssid }) {
                 val age = now - oldAp.lastSeenTime
                 if (age < AP_LIFETIME_MS) {
-                    // 在保护期内，保留
+                    // Within protection period, keep
                     result.add(oldAp)
-                    Log.d(TAG, "AP保护: ${oldAp.ssid} 已 ${age}ms 未扫到，保留")
+                    Log.d(TAG, "AP protected: ${oldAp.ssid} not scanned for ${age}ms, kept")
                 } else {
-                    // 超过生命期，移除
-                    Log.d(TAG, "AP移除: ${oldAp.ssid} 已 ${age}ms 未扫到，超过生命期")
+                    // Beyond lifetime, remove
+                    Log.d(TAG, "AP removed: ${oldAp.ssid} not scanned for ${age}ms, exceeded lifetime")
                 }
             }
         }
@@ -445,89 +446,89 @@ class ScanForegroundService : Service() {
     }
 
     /**
-     * 评估并触发漫游切换
+     * Evaluate and trigger roaming switch
      */
     private fun evaluateAndTriggerRoaming() {
-        // 用户正在手动连接时跳过漫游
+        // Skip roaming when user is manually connecting
         if (isUserConnecting) {
-            roamingLogManager.phase("漫游跳过", "#FF9800", "用户正在手动连接，等待下一次评估")
+            roamingLogManager.phase("Roaming skipped", "#FF9800", "User is manually connecting, waiting for next evaluation")
             return
         }
 
-        // 冷却期检查
+        // Cooldown check
         val now = System.currentTimeMillis()
         val timeSinceLastSwitch = now - lastRoamingSwitchTime
         if (lastRoamingSwitchTime > 0 && timeSinceLastSwitch < roamingCooldown) {
             val remaining = (roamingCooldown - timeSinceLastSwitch) / 1000
-            roamingLogManager.phase("冷却中", "#FF9800",
-                "切换冷却期剩余 ${remaining}秒，跳过本次评估")
+            roamingLogManager.phase("In cooldown", "#FF9800",
+                "Switch cooldown remaining ${remaining}s, skipping this evaluation")
             return
         }
 
         if (currentAccessPoints.isEmpty()) return
 
-        // 过滤掉没有保存密码的加密AP
+        // Filter out encrypted APs without saved passwords
         val connectableAps = currentAccessPoints.filter { ap ->
             !ap.isSecured() || !PasswordStore.get(this, ap.ssid).isNullOrEmpty()
         }
         if (connectableAps.isEmpty()) return
 
         val currentAp = connectableAps.find { it.ssid == currentConnectedSsid }
-        roamingLogManager.phase("开始评估", "#1565C0",
-            "当前: ${currentAp?.ssid ?: "无"} (${currentAp?.rssi ?: "--"}dBm), 可选: ${connectableAps.size}个")
+        roamingLogManager.phase("Evaluation started", "#1565C0",
+            "Current: ${currentAp?.ssid ?: "none"} (${currentAp?.rssi ?: "--"}dBm), Candidates: ${connectableAps.size}")
 
         val bestAp = when (roamingMode) {
             RoamingMode.ML    -> apSelectionManager.selectBestAp(connectableAps)
             RoamingMode.SCORE -> apSelectionManager.selectBestApByScore(connectableAps)
         }
         if (bestAp == null) {
-            roamingLogManager.phase("评估结束", "#757575", "未找到可用AP")
+            roamingLogManager.phase("Evaluation ended", "#757575", "No available AP found")
             return
         }
 
         if (bestAp.ssid == currentConnectedSsid) {
-            roamingLogManager.phase("评估结束", "#4CAF50", "当前已最优 (${bestAp.ssid})，不切换")
+            roamingLogManager.phase("Evaluation ended", "#4CAF50", "Current is optimal (${bestAp.ssid}), no switch needed")
             return
         }
 
-        roamingLogManager.phase("触发切换", "#E65100",
-            "${currentAp?.ssid ?: "无"} → ${bestAp.ssid} (${bestAp.rssi}dBm)")
+        roamingLogManager.phase("Switch triggered", "#E65100",
+            "${currentAp?.ssid ?: "none"} → ${bestAp.ssid} (${bestAp.rssi}dBm)")
         triggerRoamingConnection(bestAp)
     }
 
     /**
-     * 触发漫游连接（纯无障碍服务，实现真实系统切换）。
+     * Trigger roaming connection (pure accessibility service, implements real system switch).
      */
     private fun triggerRoamingConnection(targetAp: AccessPoint) {
         val password = PasswordStore.get(this, targetAp.ssid) ?: ""
         val isOpen = !targetAp.isSecured()
 
         if (!isOpen && password.isEmpty()) {
-            roamingLogManager.w("【切换失败】${targetAp.ssid} 需要密码但未保存")
+            roamingLogManager.w("[Switch Failed] ${targetAp.ssid} requires password but none saved")
             return
         }
 
-        roamingLogManager.i("【开始切换】目标AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, 类型: ${if (isOpen) "开放" else "加密"}")
+        roamingLogManager.i("[Switch Started] Target AP: ${targetAp.ssid}, RSSI: ${targetAp.rssi}dBm, Type: ${if (isOpen) "open" else "secured"}")
 
         val a11y = WifiAccessibilityService.getInstance()
         if (a11y == null) {
-            roamingLogManager.w("【切换失败】无障碍服务未启用，请在系统设置中开启")
+            roamingLogManager.w("[Switch Failed] Accessibility service not enabled, please enable in system settings")
             return
         }
 
         a11y.cancel()
 
-        roamingLogManager.i("【切换】使用无障碍服务（后台漫游，服务自开 WiFi 设置）")
+        roamingLogManager.i("[Switching] Using accessibility service (background roaming, service opens WiFi settings)")
         a11y.connectFromBackground(targetAp.ssid, password, isOpen, object : WifiAccessibilityService.ConnectionCallback {
             override fun onConnected(connectedSsid: String) {
                 currentConnectedSsid = connectedSsid
                 pinnedSsid = connectedSsid
-                lastRoamingSwitchTime = System.currentTimeMillis()  // 记录切换成功时间
-                roamingLogManager.phase("评估结束", "#4CAF50", "切换成功 → $connectedSsid")
+                lastRoamingSwitchTime = System.currentTimeMillis()  // Record successful switch time
+                roamingLogManager.phase("Evaluation ended", "#4CAF50", "Switch successful → $connectedSsid")
                 callback?.onConnectionChanged(connectedSsid, true)
             }
             override fun onFailed(failedSsid: String, reason: String) {
-                roamingLogManager.phase("评估结束", "#D32F2F", "切换失败: ${targetAp.ssid} ($reason)")
+                roamingLogManager.phase("Evaluation ended", "#D32F2F", "Switch failed: ${targetAp.ssid} ($reason)")
                 callback?.onConnectionChanged(null, false, reason)
             }
         })
@@ -535,38 +536,38 @@ class ScanForegroundService : Service() {
 
     fun setAutoRoamingEnabled(enabled: Boolean) {
         autoRoamingEnabled = enabled
-        roamingLogManager.i("【自动漫游】状态: ${if (enabled) "已开启" else "已关闭"}")
+        roamingLogManager.i("[Auto Roaming] Status: ${if (enabled) "enabled" else "disabled"}")
     }
 
     fun setRoamingMode(mode: RoamingMode) {
         roamingMode = mode
-        roamingLogManager.i("【漫游模式】已切换: ${if (mode == RoamingMode.ML) "ML模型" else "众包评分"}")
+        roamingLogManager.i("[Roaming Mode] Switched to: ${if (mode == RoamingMode.ML) "ML model" else "Crowdsourced score"}")
     }
 
     fun setRoamingCooldown(cooldown: Long) {
         roamingCooldown = cooldown
-        roamingLogManager.i("【切换冷却期】已设置为 ${cooldown / 1000} 秒")
+        roamingLogManager.i("[Switch Cooldown] Set to ${cooldown / 1000} seconds")
     }
 
     /**
-     * 更新当前连接的SSID
+     * Update currently connected SSID
      */
     fun updateConnectedSsid(ssid: String?) {
         if (currentConnectedSsid != ssid) {
             if (ssid != null) {
-                roamingLogManager.i("【连接状态】已连接到: $ssid")
+                roamingLogManager.i("[Connection State] Connected to: $ssid")
             } else {
-                roamingLogManager.i("【连接状态】连接已断开")
+                roamingLogManager.i("[Connection State] Disconnected")
             }
         }
         currentConnectedSsid = ssid
     }
 
-    // ── WakeLock 管理（按需持有，减少耗电）─────────────────────────────────
+    // ── WakeLock Management (acquired on demand, reduces power consumption) ─────────────────────────────────
 
     private fun acquireWakeLock() {
         if (!wakeLock.isHeld) {
-            wakeLock.acquire(60_000L) // 最长持有 60s，防止泄漏
+            wakeLock.acquire(60_000L) // Hold for max 60s to prevent leakage
             Log.d(TAG, "WakeLock acquired")
         }
     }
@@ -578,23 +579,23 @@ class ScanForegroundService : Service() {
         }
     }
 
-    // ── AlarmManager 周期调度（可在 Doze 低功耗状态下唤醒 CPU）───────────
+    // ── AlarmManager Periodic Scheduling (can wake CPU even in Doze low-power state) ───────────
 
     private fun scheduleNextCycleAlarm(delayMs: Long) {
         val pi = buildCycleAlarmPendingIntent(PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             ?: return
         val triggerAt = SystemClock.elapsedRealtime() + delayMs
         val am = getSystemService(AlarmManager::class.java)
-        // setAndAllowWhileIdle：Doze 期间也会触发，无需 SCHEDULE_EXACT_ALARM 权限
+        // setAndAllowWhileIdle: triggers even during Doze, no SCHEDULE_EXACT_ALARM permission needed
         am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-        Log.d(TAG, "AlarmManager 已设置，${delayMs / 1000}s 后触发")
+        Log.d(TAG, "AlarmManager set, triggering in ${delayMs / 1000}s")
     }
 
     private fun cancelNextCycleAlarm() {
         val pi = buildCycleAlarmPendingIntent(PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
             ?: return
         getSystemService(AlarmManager::class.java).cancel(pi)
-        Log.d(TAG, "AlarmManager 已取消")
+        Log.d(TAG, "AlarmManager cancelled")
     }
 
     private fun buildCycleAlarmPendingIntent(flags: Int): PendingIntent? {
@@ -604,7 +605,7 @@ class ScanForegroundService : Service() {
         return PendingIntent.getService(this, 0, intent, flags)
     }
 
-    // ── 通知 ────────────────────────────────────────────────────────────────
+    // ── Notifications ────────────────────────────────────────────────────────────────
 
     private fun updateStatus(status: String) {
         currentStatus = status
@@ -615,9 +616,9 @@ class ScanForegroundService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "WiFi扫描服务",
+                CHANNEL_ID, "WiFi Scan Service",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "保持WiFi扫描在后台运行" }
+            ).apply { description = "Keep WiFi scanning running in background" }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -629,7 +630,7 @@ class ScanForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("WiFi扫描运行中")
+            .setContentTitle("WiFi Scanning Running")
             .setContentText(status)
             .setSmallIcon(R.drawable.ic_signal_4)
             .setContentIntent(pendingIntent)
@@ -653,9 +654,9 @@ class ScanForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "服务销毁")
+        Log.d(TAG, "Service destroyed")
 
-        roamingLogManager.i("【服务停止】ScanForegroundService 已销毁")
+        roamingLogManager.i("[Service Stopped] ScanForegroundService destroyed")
 
         isRunning = false
         handler.removeCallbacksAndMessages(null)

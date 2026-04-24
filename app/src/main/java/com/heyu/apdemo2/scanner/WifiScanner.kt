@@ -12,8 +12,8 @@ import android.util.Log
 import com.heyu.apdemo2.model.AccessPoint
 
 /**
- * WiFi扫描管理器（单次扫描模式）
- * 每次调用 startScan 只触发一次系统扫描，返回去重后的结果。
+ * WiFi Scanner Manager (single scan mode)
+ * Each call to startScan triggers one system scan and returns deduplicated results.
  */
 class WifiScanner(private val context: Context, looper: Looper = Looper.getMainLooper()) {
 
@@ -46,13 +46,13 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
 
         if (!wifiManager.isWifiEnabled) {
             isScanInProgress = false
-            onError("WiFi未开启")
+            onError("WiFi is not enabled")
             return
         }
 
         val timeoutTask = Runnable {
             if (!isScanInProgress) return@Runnable
-            Log.w(TAG, "扫描超时，使用缓存结果")
+            Log.w(TAG, "Scan timeout, using cached results")
             unregisterReceiverSafely()
             deliverResults(onSuccess)
         }
@@ -73,7 +73,7 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
 
             val startSuccess = wifiManager.startScan()
             if (!startSuccess) {
-                Log.w(TAG, "扫描受限(Throttled)，使用缓存结果")
+                Log.w(TAG, "Scan throttled, using cached results")
                 handler.removeCallbacks(timeoutTask)
                 val fallbackTask = Runnable {
                     if (isScanInProgress) {
@@ -87,9 +87,9 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
                 handler.postDelayed(timeoutTask, SCAN_TIMEOUT)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "启动扫描异常: ${e.message}")
+            Log.e(TAG, "Scan start exception: ${e.message}")
             stopScan()
-            onError("启动失败")
+            onError("Failed to start scan")
         }
     }
 
@@ -120,7 +120,7 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
                         capabilities = result.capabilities ?: ""
                     )
                 }
-            // 同SSID只保留信号最强的
+            // Keep only strongest signal for each SSID
             val merged = accessPoints
                 .groupBy { it.ssid }
                 .map { (_, aps) -> aps.maxByOrNull { it.rssi }!! }
@@ -128,7 +128,7 @@ class WifiScanner(private val context: Context, looper: Looper = Looper.getMainL
 
             onSuccess(merged)
         } catch (e: Exception) {
-            Log.e(TAG, "处理扫描结果出错: ${e.message}")
+            Log.e(TAG, "Error processing scan results: ${e.message}")
             onSuccess(emptyList())
         }
     }

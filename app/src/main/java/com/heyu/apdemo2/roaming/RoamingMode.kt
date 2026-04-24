@@ -1,10 +1,10 @@
 package com.heyu.apdemo2.roaming
 
 /**
- * 漫游策略模式
+ * Roaming Strategy Mode
  *
- * ML    - 使用 new_ap_selection 下的视频专用模型（pairwise 比较）
- * SCORE - 仅依据后端返回的众包评分，直接选最高分 AP
+ * ML    - Uses video-specific model under new_ap_selection (pairwise comparison)
+ * SCORE - Selects AP with highest score based solely on backend crowdsourced scores
  */
 enum class RoamingMode {
     ML,

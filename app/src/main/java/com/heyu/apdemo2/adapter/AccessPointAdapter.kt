@@ -47,7 +47,7 @@ class AccessPointAdapter(
         holder.rssiText.text = "${ap.rssi} dBm"
         setSignalIcon(holder.signalIcon, ap.getSignalLevel())
 
-        // 已连接指示图标 + 置顶背景
+        // Connected indicator icon + pinned background
         holder.connectedIcon.visibility = if (isPinned) View.VISIBLE else View.GONE
         holder.itemView.setBackgroundColor(
             if (isPinned)
@@ -79,7 +79,7 @@ class AccessPointAdapter(
             }
         }
 
-        // 点击整个 item → 连接/取消连接
+        // Click entire item -> connect/disconnect
         holder.itemView.setOnClickListener {
             onItemClickListener?.onItemClick(ap)
         }
@@ -88,7 +88,8 @@ class AccessPointAdapter(
     override fun getItemCount(): Int = accessPoints.size
 
     /**
-     * 更新数据：置顶 AP 排第一，然后按评分降序，无评分的按信号强度排序。
+     * Update data: pinned AP first, then sorted by score descending,
+     * those without score sorted by signal strength.
      */
     fun updateData(newData: List<AccessPoint>) {
         accessPoints = sortWithPinned(newData)
@@ -96,7 +97,7 @@ class AccessPointAdapter(
     }
 
     /**
-     * 设置（或清除）置顶 SSID，并对当前列表重新排序。
+     * Set (or clear) pinned SSID and re-sort current list.
      */
     fun setPinned(ssid: String?) {
         pinnedSsid = ssid

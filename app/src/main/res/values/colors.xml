@@ -2,18 +2,18 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    
-    <!-- 评分颜色 -->
-    <color name="score_excellent">#4CAF50</color>  <!-- 优秀: 绿色 -->
-    <color name="score_good">#2196F3</color>      <!-- 良好: 蓝色 -->
-    <color name="score_fair">#FF9800</color>       <!-- 一般: 橙色 -->
-    <color name="score_poor">#F44336</color>       <!-- 较差: 红色 -->
-    
-    <color name="pale_blue">#87CEFA</color>        <!-- 淡蓝色 -->
-    <color name="dialog_blue">#42A5F5</color>      <!-- 弹窗主题浅蓝 -->
-    <color name="dialog_blue_dark">#1E88E5</color> <!-- 弹窗主题浅蓝（深） -->
-    <color name="pinned_bg">#E8F5E9</color>        <!-- 已连接AP背景：淡绿色 -->
-    
+
+    <!-- Score colors -->
+    <color name="score_excellent">#4CAF50</color>  <!-- Excellent: Green -->
+    <color name="score_good">#2196F3</color>      <!-- Good: Blue -->
+    <color name="score_fair">#FF9800</color>       <!-- Fair: Orange -->
+    <color name="score_poor">#F44336</color>       <!-- Poor: Red -->
+
+    <color name="pale_blue">#87CEFA</color>        <!-- Pale blue -->
+    <color name="dialog_blue">#42A5F5</color>      <!-- Dialog theme light blue -->
+    <color name="dialog_blue_dark">#1E88E5</color> <!-- Dialog theme light blue (dark) -->
+    <color name="pinned_bg">#E8F5E9</color>        <!-- Connected AP background: Pale green -->
+
     <color name="up">#ADB8B8</color>
     <color name="down">#1A1919</color>
 </resources>

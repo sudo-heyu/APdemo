@@ -29,7 +29,7 @@ class HelpFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         view.findViewById<MaterialCardView>(R.id.card_background).setOnClickListener {
-            showDetail("无法后台运行？", BACKGROUND_CONTENT)
+            showDetail("Cannot run in background?", BACKGROUND_CONTENT)
         }
         view.findViewById<MaterialCardView>(R.id.card_auto_connect).setOnClickListener {
             showAutoConnectDetail()
@@ -48,7 +48,7 @@ class HelpFragment : Fragment() {
     """.trimIndent()
 
     private fun logsToHtml(logText: String): String {
-        val body = if (logText.isBlank() || logText == "暂无日志") "暂无日志"
+        val body = if (logText.isBlank() || logText == "No logs available") "No logs available"
                    else logText.replace("\n", "<br>")
         return """<html><head><style>$logHtmlStyle</style></head>
             <body><div id="log">$body</div>
@@ -94,12 +94,12 @@ class HelpFragment : Fragment() {
         logManager.addListener(listener)
 
         AlertDialog.Builder(ctx)
-            .setTitle("漫游算法日志")
+            .setTitle("Roaming Algorithm Log")
             .setView(webView)
-            .setPositiveButton("关闭", null)
-            .setNeutralButton("清空") { _, _ ->
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Clear") { _, _ ->
                 logManager.clearLogs()
-                webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
+                webView.loadDataWithBaseURL(null, logsToHtml("No logs available"), "text/html", "UTF-8", null)
             }
             .setOnDismissListener {
                 logManager.removeListener(listener)
@@ -124,7 +124,7 @@ class HelpFragment : Fragment() {
         AlertDialog.Builder(ctx)
             .setTitle(title)
             .setView(scrollView)
-            .setPositiveButton("知道了", null)
+            .setPositiveButton("OK", null)
             .show()
     }
 
@@ -138,7 +138,7 @@ class HelpFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
         }
 
-        // 文字说明
+        // Text description
         root.addView(TextView(ctx).apply {
             text = AUTO_CONNECT_CONTENT
             textSize = 14f
@@ -147,12 +147,12 @@ class HelpFragment : Fragment() {
             setPadding(padH, padV, padH, padV)
         })
 
-        // 4 张引导图
+        // 4 guide images
         val guides = listOf(
-            Pair(R.drawable.guild_1, "引导一：点击「去开启」"),
-            Pair(R.drawable.guild_2, "引导二：找到「WiFi一键切换」"),
-            Pair(R.drawable.guild_3, "引导三：打开「WiFi一键切换」"),
-            Pair(R.drawable.guild_4, "引导四：点击「允许」")
+            Pair(R.drawable.guild_1, "Step 1: Tap \"Go to Settings\""),
+            Pair(R.drawable.guild_2, "Step 2: Find \"WiFi Quick Switch\""),
+            Pair(R.drawable.guild_3, "Step 3: Enable \"WiFi Quick Switch\""),
+            Pair(R.drawable.guild_4, "Step 4: Tap \"Allow\"")
         )
 
         for ((drawableId, caption) in guides) {
@@ -175,78 +175,78 @@ class HelpFragment : Fragment() {
         }
 
         AlertDialog.Builder(ctx)
-            .setTitle("无法自动连接？")
+            .setTitle("Cannot auto-connect?")
             .setView(ScrollView(ctx).also { it.addView(root) })
-            .setPositiveButton("知道了", null)
+            .setPositiveButton("OK", null)
             .show()
     }
 
-    // ── 帮助内容 ──────────────────────────────────────────────────────────────
+    // ── Help Content ──────────────────────────────────────────────────────────────
 
     private val BACKGROUND_CONTENT = """
-本应用使用前台服务 + WakeLock 保持后台运行不中断，但国内各厂商系统会额外限制后台活动。请按您的手机品牌进行设置：
+This app uses foreground service + WakeLock to keep running in background without interruption, but domestic manufacturers' systems may impose additional restrictions on background activities. Please configure according to your phone brand:
 
-【小米 / 红米 / MIUI / HyperOS】
-• 设置 → 应用设置 → 应用管理 → 找到本应用
-• 点击「省电策略」→ 选择「无限制」
-• 设置 → 权限 → 自启动 → 开启本应用
+【Xiaomi / Redmi / MIUI / HyperOS】
+• Settings → App settings → App management → Find this app
+• Tap "Battery saver" → Select "Unrestricted"
+• Settings → Permissions → Autostart → Enable this app
 
-【华为 / 荣耀 / HarmonyOS】
-• 设置 → 应用 → 应用启动管理 → 找到本应用
-• 关闭「自动管理」→ 手动勾选：
-  ✓ 允许自启动
-  ✓ 允许后台活动
-  ✓ 允许关联启动
+【Huawei / Honor / HarmonyOS】
+• Settings → Apps → App launch → Find this app
+• Disable "Manage automatically" → Manually check:
+  ✓ Allow auto-launch
+  ✓ Allow background activity
+  ✓ Allow secondary launch
 
-【OPPO / 一加 / 真我 / ColorOS】
-• 设置 → 电池 → 耗电保护 → 找到本应用 → 关闭限制
-• 设置 → 应用管理 → 本应用 → 省电 → 后台运行不受限
+【OPPO / OnePlus / realme / ColorOS】
+• Settings → Battery → Battery protection → Find this app → Disable restriction
+• Settings → App management → This app → Battery → Allow background activity
 
 【VIVO / OriginOS / FuntouchOS】
-• 设置 → 电池 → 后台高耗电 → 允许本应用
-• i管家 → 软件管理 → 权限管理 → 找到本应用 → 允许后台运行
+• Settings → Battery → High background power consumption → Allow this app
+• iManager → App management → Permission management → Find this app → Allow background running
 
-【三星 / One UI】
-• 设置 → 应用程序 → 找到本应用 → 电池 → 选择「无限制」
+【Samsung / One UI】
+• Settings → Apps → Find this app → Battery → Select "Unrestricted"
 
-【通用方法】
-• 设置 → 应用 → 找到本应用 → 电池 → 不限制后台活动
-• 在最近任务界面，长按本应用卡片 → 锁定（防止被清理）
+【General Method】
+• Settings → Apps → Find this app → Battery → Don't restrict background activity
+• In recent apps view, long press this app's card → Lock (prevent clearing)
     """.trimIndent()
 
     private val AUTO_CONNECT_CONTENT = """
-点击列表中的 WiFi 后，系统会在当前页面弹出一个小窗口，确认后即可完成连接，无需跳转到 WiFi 设置页面。
+After tapping a WiFi in the list, the system will pop up a small window on the current page, and you can complete the connection after confirmation, without jumping to the WiFi settings page.
 
-如果弹窗没有出现，请检查：
-• WiFi 是否已开启
-• 目标网络是否在信号覆盖范围内
+If the popup doesn't appear, please check:
+• Is WiFi enabled
+• Is the target network within signal coverage
 
-如果弹窗出现但连接失败：
-• 确认密码输入无误（至少 8 位）
-• 尝试忘记该网络后重新连接
-• 部分企业级加密（WPA3-Enterprise）暂不支持
+If the popup appears but connection fails:
+• Confirm password is correct (at least 8 characters)
+• Try forgetting the network then reconnect
+• Some enterprise encryption (WPA3-Enterprise) is not supported
 
-如果您希望开启更顺畅的「一键切换」体验，可前往手机的无障碍设置，开启本应用的无障碍服务权限。开启后点击 WiFi 将直接完成连接，无需任何弹窗确认。
+If you want a smoother "one-tap switch" experience, you can go to the phone's accessibility settings and enable this app's accessibility service permission. After enabling, tapping WiFi will complete the connection directly without any popup confirmation.
 
-各品牌开启路径如下：
+Path for each brand:
 
-【小米 / 红米 / MIUI / HyperOS】
-设置 → 更多设置 → 无障碍 → 已安装的应用 → APdemo → 开启
+【Xiaomi / Redmi / MIUI / HyperOS】
+Settings → Additional settings → Accessibility → Installed apps → APdemo → Enable
 
-【华为 / 荣耀 / HarmonyOS】
-设置 → 辅助功能 → 无障碍功能 → 已安装的服务 → APdemo → 开启
+【Huawei / Honor / HarmonyOS】
+Settings → Accessibility features → Accessibility → Installed services → APdemo → Enable
 
-【OPPO / 一加 / 真我 / ColorOS】
-设置 → 其他设置 → 辅助功能 → 无障碍 → 已安装的应用 → APdemo → 开启
+【OPPO / OnePlus / realme / ColorOS】
+Settings → Additional settings → Accessibility → Accessibility → Installed apps → APdemo → Enable
 
 【VIVO / OriginOS / FuntouchOS】
-设置 → 更多设置 → 无障碍 → 已下载的应用 → APdemo → 开启
-（若列表中找不到，请先卸载重装应用后再查找）
+Settings → More settings → Accessibility → Downloaded apps → APdemo → Enable
+(If not found in list, please uninstall and reinstall the app first)
 
-【三星 / One UI】
-设置 → 辅助功能 → 已安装的应用 → APdemo → 开启
+【Samsung / One UI】
+Settings → Accessibility → Installed apps → APdemo → Enable
 
-【通用】
-设置 → 无障碍（或辅助功能）→ 已安装的服务 → APdemo → 开启
+【General】
+Settings → Accessibility (or Accessibility features) → Installed services → APdemo → Enable
     """.trimIndent()
 }

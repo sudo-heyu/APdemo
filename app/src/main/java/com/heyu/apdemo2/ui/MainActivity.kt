@@ -60,7 +60,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val KEY_AUTO_ROAMING  = "auto_roaming"
         private const val KEY_ROAMING_MODE  = "roaming_mode"   // "ML" | "SCORE"
-        private const val KEY_ROAMING_COOLDOWN = "roaming_cooldown" // 切换冷却期（毫秒）
+        private const val KEY_ROAMING_COOLDOWN = "roaming_cooldown" // Switch cooldown (milliseconds)
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -69,7 +69,7 @@ class MainActivity : AppCompatActivity() {
             scanService = binder.getService()
             isBound = true
             getWifiFragment()?.onServiceBound(scanService!!)
-            // 同步自动漫游状态 & 漫游模式
+            // Sync auto-roaming state & roaming mode
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val autoRoamingEnabled = prefs.getBoolean(KEY_AUTO_ROAMING, false)
             val roamingModeStr = prefs.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)
@@ -78,17 +78,17 @@ class MainActivity : AppCompatActivity() {
             scanService?.setAutoRoamingEnabled(autoRoamingEnabled)
             scanService?.setRoamingMode(roamingMode)
             scanService?.setRoamingCooldown(roamingCooldown)
-            Log.d(TAG, "服务已绑定，自动漫游: $autoRoamingEnabled，模式: $roamingMode，冷却期: ${roamingCooldown}ms")
+            Log.d(TAG, "Service bound, auto-roaming: $autoRoamingEnabled, mode: $roamingMode, cooldown: ${roamingCooldown}ms")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             getWifiFragment()?.onServiceUnbound()
             scanService = null
             isBound = false
-            Log.d(TAG, "服务连接断开")
+            Log.d(TAG, "Service connection disconnected")
         }
     }
 
-    // ── 生命周期 ────────────────────────────────────────────────────────────
+    // ── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,10 +104,10 @@ class MainActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         bottomNav = findViewById(R.id.bottom_nav)
-        // 完全移除底部导航栏的边距，使其紧贴底部
+        // Completely remove bottom navigation bar margins to make it flush with bottom
         bottomNav.setPadding(0, 0, 0, 0)
         bottomNav.minimumHeight = 0
-        // 递归移除所有子视图的边距
+        // Recursively remove margins from all child views
         for (i in 0 until bottomNav.childCount) {
             val child = bottomNav.getChildAt(i)
             child.setPadding(0, 0, 0, 0)
@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         ViewCompat.setOnApplyWindowInsetsListener(bottomNav) { _, insets ->
-            // 消费掉所有 insets，不让 BottomNavigationView 自动添加底部 padding
+            // Consume all insets, don't let BottomNavigationView auto-add bottom padding
             WindowInsetsCompat.CONSUMED
         }
 
@@ -147,7 +147,7 @@ class MainActivity : AppCompatActivity() {
         if (!isBound) {
             val intent = Intent(this, ScanForegroundService::class.java)
             val bound = bindService(intent, serviceConnection, 0)
-            Log.d(TAG, "onStart 尝试绑定已有服务: $bound")
+            Log.d(TAG, "onStart attempting to bind existing service: $bound")
         }
     }
 
@@ -161,17 +161,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun showA11yPrompt() {
         AlertDialog.Builder(this)
-            .setTitle("需要开启无障碍服务")
+            .setTitle("Accessibility Service Required")
             .setMessage(
-                "APdemo2 需要无障碍服务权限才能实现真实 WiFi 切换（其他 App 如直播也跟随切换）。\n\n" +
-                "请在「无障碍」→「已下载的应用」中找到「${getString(R.string.app_name)}」并开启。"
+                "APdemo2 requires accessibility service permission to perform real WiFi switching (other apps like streaming also follow the switch).\n\n" +
+                "Please find \"${getString(R.string.app_name)}\" in \"Accessibility\" → \"Downloaded apps\" and enable it."
             )
-            .setPositiveButton("去开启") { _, _ ->
+            .setPositiveButton("Go to Settings") { _, _ ->
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 })
             }
-            .setNegativeButton("暂不", null)
+            .setNegativeButton("Not Now", null)
             .show()
     }
 
@@ -181,17 +181,17 @@ class MainActivity : AppCompatActivity() {
             scanService?.unregisterCallback()
             unbindService(serviceConnection)
             isBound = false
-            Log.d(TAG, "已解绑服务")
+            Log.d(TAG, "Service unbound")
         }
-        // 停止性能监控服务
+        // Stop performance monitoring service
         ApPerformanceMonitor.stop(this)
-        Log.d(TAG, "性能监控服务已停止")
+        Log.d(TAG, "Performance monitoring service stopped")
     }
 
-    // ── Fragment 切换 ────────────────────────────────────────────────────────
+    // ── Fragment Switching ────────────────────────────────────────────────────────
 
     private fun showWifiFragment() {
-        toolbar.title = "WIFI"
+        toolbar.title = "WiFi"
         val fm = supportFragmentManager
         var frag = getWifiFragment()
         if (frag == null) {
@@ -208,7 +208,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showHelpFragment() {
-        toolbar.title = "帮助"
+        toolbar.title = "Help"
         val fm = supportFragmentManager
         var frag = getHelpFragment()
         if (frag == null) {
@@ -230,11 +230,11 @@ class MainActivity : AppCompatActivity() {
     private fun getHelpFragment() =
         supportFragmentManager.findFragmentByTag(HelpFragment.FRAGMENT_TAG) as? HelpFragment
 
-    // ── 供 WifiFragment 访问服务 ─────────────────────────────────────────────
+    // ── For WifiFragment to access service ─────────────────────────────────────────────
 
     fun getScanService(): ScanForegroundService? = scanService
 
-    // ── 服务启动 ─────────────────────────────────────────────────────────────
+    // ── Service Startup ─────────────────────────────────────────────────────────────
 
     private fun startAndBindService() {
         val (ip, port) = getServerAddress()
@@ -258,12 +258,12 @@ class MainActivity : AppCompatActivity() {
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
 
-        // 启动性能监控服务
+        // Start performance monitoring service
         ApPerformanceMonitor.start(this)
-        Log.d(TAG, "性能监控服务已启动")
+        Log.d(TAG, "Performance monitoring service started")
     }
 
-    // ── 权限流程 ────────────────────────────────────────────────────────────
+    // ── Permission Flow ────────────────────────────────────────────────────────────
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -273,7 +273,7 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             if (permissions.values.all { it }) checkBackgroundLocationPermission()
-            else Toast.makeText(this, "未获得必要权限", Toast.LENGTH_SHORT).show()
+            else Toast.makeText(this, "Required permissions not granted", Toast.LENGTH_SHORT).show()
         }
 
     private val backgroundLocationLauncher =
@@ -325,16 +325,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── 菜单 ────────────────────────────────────────────────────────────────
+    // ── Menu ────────────────────────────────────────────────────────
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
-        // 设置自动漫游开关状态，默认关闭
+        // Set auto-roaming switch state, default off
         val autoRoamingItem = menu.findItem(R.id.action_auto_roaming)
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val autoRoamingEnabled = prefs.getBoolean(KEY_AUTO_ROAMING, false)
         autoRoamingItem?.isChecked = autoRoamingEnabled
-        // 设置自定义按钮样式和点击事件
+        // Set custom button style and click event
         setupRoamingButton(autoRoamingItem, autoRoamingEnabled)
         scanService?.setAutoRoamingEnabled(autoRoamingEnabled)
         return true
@@ -344,7 +344,7 @@ class MainActivity : AppCompatActivity() {
         item?.let {
             val actionView = it.actionView ?: return@let
             val textView = actionView.findViewById<TextView>(R.id.roaming_button) ?: return@let
-            // 用 GradientDrawable 替换 selector，后续可直接动画改色
+            // Replace selector with GradientDrawable, can animate colors later
             textView.background = makeRoamingDrawable(initialEnabled)
             textView.setTextColor(if (initialEnabled) Color.WHITE else BLUE)
             actionView.setOnClickListener { toggleRoamingState(item) }
@@ -358,14 +358,14 @@ class MainActivity : AppCompatActivity() {
             .edit().putBoolean(KEY_AUTO_ROAMING, newState).apply()
         scanService?.setAutoRoamingEnabled(newState)
         animateRoamingButton(item, newState)
-        Toast.makeText(this, if (newState) "自动漫游已开启" else "自动漫游已关闭", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, if (newState) "Auto-roaming enabled" else "Auto-roaming disabled", Toast.LENGTH_SHORT).show()
     }
 
-    // ── 漫游按钮动画 ────────────────────────────────────────────────────────
+    // ── Roaming Button Animation ────────────────────────────────────────────────────────
 
     private val BLUE = Color.parseColor("#2196F3")
 
-    /** 按钮背景 GradientDrawable，enabled=true 为填充蓝，false 为镂空 */
+    /** Button background GradientDrawable, enabled=true is filled blue, false is outlined */
     private fun makeRoamingDrawable(enabled: Boolean) = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = 4f * resources.displayMetrics.density
@@ -374,17 +374,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 切换动画：
-     *   1. 按压缩放 → OvershootInterpolator 弹回
-     *   2. 背景色渐变（透明 ↔ 蓝色填充）
-     *   3. 文字色渐变（蓝色 ↔ 白色）
+     * Toggle animation:
+     *   1. Press scale → OvershootInterpolator bounce back
+     *   2. Background color gradient (transparent ↔ blue fill)
+     *   3. Text color gradient (blue ↔ white)
      */
     private fun animateRoamingButton(item: MenuItem?, enabled: Boolean) {
         val actionView = item?.actionView ?: return
         val textView   = actionView.findViewById<TextView>(R.id.roaming_button) ?: return
         val drawable   = textView.background as? GradientDrawable ?: run {
-            // 万一背景不是 GradientDrawable，先替换再动画
-            val d = makeRoamingDrawable(!enabled)   // 当前状态（切换前）
+            // In case background isn't GradientDrawable, replace then animate
+            val d = makeRoamingDrawable(!enabled)   // Current state (before toggle)
             textView.background = d; d
         }
 
@@ -393,7 +393,7 @@ class MainActivity : AppCompatActivity() {
         val txFrom  = if (enabled) BLUE else Color.WHITE
         val txTo    = if (enabled) Color.WHITE else BLUE
 
-        // 1. 按压缩放反馈
+        // 1. Press scale feedback
         actionView.animate()
             .scaleX(0.88f).scaleY(0.88f)
             .setDuration(80)
@@ -405,14 +405,14 @@ class MainActivity : AppCompatActivity() {
                     .start()
             }.start()
 
-        // 2. 背景色渐变
+        // 2. Background color gradient
         ValueAnimator.ofObject(ArgbEvaluator(), bgFrom, bgTo).apply {
             duration = 260
             addUpdateListener { drawable.setColor(it.animatedValue as Int) }
             start()
         }
 
-        // 3. 文字色渐变
+        // 3. Text color gradient
         ValueAnimator.ofObject(ArgbEvaluator(), txFrom, txTo).apply {
             duration = 260
             addUpdateListener { textView.setTextColor(it.animatedValue as Int) }
@@ -427,7 +427,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_request_scores -> { requestScores(); true }
             R.id.action_export_log -> { exportRoamingLog(); true }
             R.id.action_auto_roaming -> {
-                // 点击事件已在 setupRoamingButton 中处理
+                // Click event handled in setupRoamingButton
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -437,14 +437,14 @@ class MainActivity : AppCompatActivity() {
     private fun requestScores() {
         val service = scanService
         if (service == null) {
-            Toast.makeText(this, "服务未启动", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Service not started", Toast.LENGTH_SHORT).show()
             return
         }
         if (service.currentAccessPoints.isEmpty()) {
-            Toast.makeText(this, "暂无扫描数据", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No scan data available", Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, "正在请求评分...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Requesting scores...", Toast.LENGTH_SHORT).show()
         service.requestScores()
     }
 
@@ -457,7 +457,7 @@ class MainActivity : AppCompatActivity() {
     """.trimIndent()
 
     private fun logsToHtml(logText: String): String {
-        val body = if (logText.isBlank() || logText == "暂无日志") "暂无日志"
+        val body = if (logText.isBlank() || logText == "No logs available") "No logs available"
                    else logText.replace("\n", "<br>")
         return """<html><head><style>$logHtmlStyle</style></head>
             <body><div id="log">$body</div>
@@ -506,11 +506,11 @@ class MainActivity : AppCompatActivity() {
         logManager.addListener(listener)
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("漫游算法日志")
+            .setTitle("Roaming Algorithm Log")
             .setView(webView)
-            .setPositiveButton("关闭", null)
-            .setNegativeButton("底部", null)
-            .setNeutralButton("清空", null)
+            .setPositiveButton("Close", null)
+            .setNegativeButton("Bottom", null)
+            .setNeutralButton("Clear", null)
             .setOnDismissListener {
                 logManager.removeListener(listener)
                 webView.destroy()
@@ -522,34 +522,34 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
             logManager.clearLogs()
-            webView.loadDataWithBaseURL(null, logsToHtml("暂无日志"), "text/html", "UTF-8", null)
+            webView.loadDataWithBaseURL(null, logsToHtml("No logs available"), "text/html", "UTF-8", null)
         }
     }
 
     private fun exportRoamingLog() {
         val (ip, port) = getServerAddress()
         if (ip.isNullOrBlank() || port == -1) {
-            Toast.makeText(this, "请先配置服务器地址", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Please configure server address first", Toast.LENGTH_SHORT).show()
             return
         }
         val logManager = RoamingLogManager.getInstance(this)
         val logs = logManager.getLogs()
-        if (logs == "暂无日志") {
-            Toast.makeText(this, "暂无日志可导出", Toast.LENGTH_SHORT).show()
+        if (logs == "No logs available") {
+            Toast.makeText(this, "No logs to export", Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, "正在导出...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Exporting...", Toast.LENGTH_SHORT).show()
         ApiService().uploadRoamingLog(ip, port, logs, object : ApiService.SimpleCallback {
             override fun onSuccess() {
-                runOnUiThread { Toast.makeText(this@MainActivity, "日志导出成功", Toast.LENGTH_SHORT).show() }
+                runOnUiThread { Toast.makeText(this@MainActivity, "Log exported successfully", Toast.LENGTH_SHORT).show() }
             }
             override fun onError(error: String) {
-                runOnUiThread { Toast.makeText(this@MainActivity, "导出失败: $error", Toast.LENGTH_LONG).show() }
+                runOnUiThread { Toast.makeText(this@MainActivity, "Export failed: $error", Toast.LENGTH_LONG).show() }
             }
         })
     }
 
-    // ── 配置对话框 ──────────────────────────────────────────────────────────
+    // ── Configuration Dialog ──────────────────────────────────────────────────────────
 
     private fun getServerAddress(): Pair<String?, Int> {
         val sharedPref = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -571,21 +571,21 @@ class MainActivity : AppCompatActivity() {
             setPadding(50, 40, 50, 40)
         }
 
-        val ipInput = EditText(this).apply { hint = "服务器 IP"; setText(currentIp) }
+        val ipInput = EditText(this).apply { hint = "Server IP"; setText(currentIp) }
         val portInput = EditText(this).apply {
-            hint = "端口"; inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "Port"; inputType = InputType.TYPE_CLASS_NUMBER
             if (currentPort != -1) setText(currentPort.toString())
         }
         val scanIntInput = EditText(this).apply {
-            hint = "扫描间隔 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "Scan Interval (seconds)"; inputType = InputType.TYPE_CLASS_NUMBER
             setText(currentScanInt.toString())
         }
         val cooldownInput = EditText(this).apply {
-            hint = "切换冷却期 (秒)"; inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "Switch Cooldown (seconds)"; inputType = InputType.TYPE_CLASS_NUMBER
             setText(currentCooldown.toString())
         }
 
-        // ── 漫游策略切换器（无 ripple 残影的自绘 segmented control）────────
+        // ── Roaming Strategy Switcher (self-drawn segmented control without ripple residue) ────────
         var selectedMode = currentMode
         val density = resources.displayMetrics.density
 
@@ -605,8 +605,8 @@ class MainActivity : AppCompatActivity() {
             isFocusable = true
         }
 
-        val btnMl    = segBtn("ML 漫游")
-        val btnScore = segBtn("评分漫游")
+        val btnMl    = segBtn("ML Roaming")
+        val btnScore = segBtn("Score Roaming")
 
         fun applySegState(target: TextView, active: Boolean, animate: Boolean) {
             val bgTo = if (active) BLUE else Color.TRANSPARENT
@@ -632,7 +632,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 初始状态（不播动画）
+        // Initial state (no animation)
         applySegState(btnMl,    selectedMode == RoamingMode.ML,    animate = false)
         applySegState(btnScore, selectedMode == RoamingMode.SCORE, animate = false)
 
@@ -662,17 +662,17 @@ class MainActivity : AppCompatActivity() {
 
         container.addView(ipInput)
         container.addView(portInput)
-        container.addView(TextView(this).apply { text = "\n扫描间隔 (秒):" })
+        container.addView(TextView(this).apply { text = "\nScan Interval (seconds):" })
         container.addView(scanIntInput)
-        container.addView(TextView(this).apply { text = "\n切换冷却期 (秒):" })
+        container.addView(TextView(this).apply { text = "\nSwitch Cooldown (seconds):" })
         container.addView(cooldownInput)
-        container.addView(TextView(this).apply { text = "\n漫游策略:" })
+        container.addView(TextView(this).apply { text = "\nRoaming Strategy:" })
         container.addView(segRow)
 
         AlertDialog.Builder(this)
-            .setTitle("参数配置")
+            .setTitle("Parameter Configuration")
             .setView(container)
-            .setPositiveButton("保存") { _, _ ->
+            .setPositiveButton("Save") { _, _ ->
                 val ip = ipInput.text.toString().trim()
                 val p  = portInput.text.toString().trim()
                 val scanInt = scanIntInput.text.toString().trim().toLongOrNull() ?: 35L
@@ -697,7 +697,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton("Cancel", null)
             .show()
     }
 }

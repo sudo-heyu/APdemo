@@ -7,12 +7,13 @@ import android.os.Handler
 import android.util.Log
 
 /**
- * WiFi 连接管理器（已精简）。
+ * WiFi Connection Manager (simplified).
  *
- * 【重要】Android 10+ 请使用 ScanForegroundService.connectWithSpecifier()，
- * 此类仅保留用于 Android 9 及以下设备的传统连接方式。
+ * [IMPORTANT] On Android 10+, please use ScanForegroundService.connectWithSpecifier(),
+ * this class is only kept for legacy connection methods on Android 9 and below.
  *
- * Android 9 及以下：使用 WifiManager 传统 API（addNetwork + enableNetwork），直接替换系统 WiFi 连接。
+ * Android 9 and below: Uses WifiManager legacy API (addNetwork + enableNetwork),
+ * directly replaces system WiFi connection.
  */
 class WifiConnector(private val context: Context, private val handler: Handler) {
 
@@ -24,8 +25,8 @@ class WifiConnector(private val context: Context, private val handler: Handler) 
     }
 
     /**
-     * 连接到指定 WiFi 网络。
-     * 【注意】Android 10+ 上此方法会失败，请使用 WifiNetworkSpecifier 方式。
+     * Connect to specified WiFi network.
+     * [NOTE] This method will fail on Android 10+, please use WifiNetworkSpecifier method.
      */
     fun connect(
         ssid: String,
@@ -35,14 +36,14 @@ class WifiConnector(private val context: Context, private val handler: Handler) 
         onFailed: (String) -> Unit
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            onFailed("Android 10+ 请使用 WifiNetworkSpecifier 方式连接")
+            onFailed("Please use WifiNetworkSpecifier method for Android 10+")
             return
         }
         connectLegacy(ssid, isOpen, password, onConnected, onFailed)
     }
 
     fun disconnect() {
-        Log.d(TAG, "主动断开")
+        Log.d(TAG, "Active disconnect")
     }
 
     @Suppress("DEPRECATION")
@@ -67,11 +68,11 @@ class WifiConnector(private val context: Context, private val handler: Handler) 
             wm.disconnect()
             wm.enableNetwork(networkId, true)
             wm.reconnect()
-            Log.d(TAG, "Legacy 连接已触发: $ssid (networkId=$networkId)")
+            Log.d(TAG, "Legacy connection triggered: $ssid (networkId=$networkId)")
             handler.post { onConnected() }
         } else {
-            Log.w(TAG, "addNetwork 返回 -1: $ssid")
-            handler.post { onFailed("无法添加网络配置，请在系统设置中手动连接") }
+            Log.w(TAG, "addNetwork returned -1: $ssid")
+            handler.post { onFailed("Cannot add network configuration, please connect manually in system settings") }
         }
     }
 }
