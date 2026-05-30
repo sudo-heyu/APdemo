@@ -562,9 +562,6 @@ class MainActivity : AppCompatActivity() {
         val currentPort    = sharedPref.getInt(KEY_PORT, -1)
         val currentScanInt = sharedPref.getLong(KEY_SCAN_INTERVAL, 35000L) / 1000
         val currentCooldown = sharedPref.getLong(KEY_ROAMING_COOLDOWN, 5000L) / 1000
-        val currentMode    = runCatching {
-            RoamingMode.valueOf(sharedPref.getString(KEY_ROAMING_MODE, RoamingMode.ML.name)!!)
-        }.getOrDefault(RoamingMode.ML)
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -585,89 +582,12 @@ class MainActivity : AppCompatActivity() {
             setText(currentCooldown.toString())
         }
 
-        // ── Roaming Strategy Switcher (self-drawn segmented control without ripple residue) ────────
-        var selectedMode = currentMode
-        val density = resources.displayMetrics.density
-
-        fun segBtn(label: String) = TextView(this).apply {
-            text = label
-            textSize = 13f
-            setPadding((14 * density).toInt(), (8 * density).toInt(),
-                       (14 * density).toInt(), (8 * density).toInt())
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 4f * density
-                setColor(Color.TRANSPARENT)
-                setStroke(density.toInt().coerceAtLeast(1), BLUE)
-            }
-            setTextColor(BLUE)
-            isClickable = true
-            isFocusable = true
-        }
-
-        val btnMl    = segBtn("ML Roaming")
-        val btnScore = segBtn("Score Roaming")
-
-        fun applySegState(target: TextView, active: Boolean, animate: Boolean) {
-            val bgTo = if (active) BLUE else Color.TRANSPARENT
-            val txTo = if (active) Color.WHITE else BLUE
-            if (animate) {
-                val bgFrom = if (active) Color.TRANSPARENT else BLUE
-                val txFrom = if (active) BLUE else Color.WHITE
-                ValueAnimator.ofObject(ArgbEvaluator(), bgFrom, bgTo).apply {
-                    duration = 200
-                    addUpdateListener {
-                        (target.background as? GradientDrawable)?.setColor(it.animatedValue as Int)
-                    }
-                    start()
-                }
-                ValueAnimator.ofObject(ArgbEvaluator(), txFrom, txTo).apply {
-                    duration = 200
-                    addUpdateListener { target.setTextColor(it.animatedValue as Int) }
-                    start()
-                }
-            } else {
-                (target.background as? GradientDrawable)?.setColor(bgTo)
-                target.setTextColor(txTo)
-            }
-        }
-
-        // Initial state (no animation)
-        applySegState(btnMl,    selectedMode == RoamingMode.ML,    animate = false)
-        applySegState(btnScore, selectedMode == RoamingMode.SCORE, animate = false)
-
-        btnMl.setOnClickListener {
-            if (selectedMode != RoamingMode.ML) {
-                selectedMode = RoamingMode.ML
-                applySegState(btnMl,    active = true,  animate = true)
-                applySegState(btnScore, active = false, animate = true)
-            }
-        }
-        btnScore.setOnClickListener {
-            if (selectedMode != RoamingMode.SCORE) {
-                selectedMode = RoamingMode.SCORE
-                applySegState(btnScore, active = true,  animate = true)
-                applySegState(btnMl,    active = false, animate = true)
-            }
-        }
-
-        val segRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            lp.marginEnd = (6 * density).toInt()
-            addView(btnMl,    lp)
-            addView(btnScore, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        // ─────────────────────────────────────────────────────────────────────
-
         container.addView(ipInput)
         container.addView(portInput)
         container.addView(TextView(this).apply { text = "\nScan Interval (seconds):" })
         container.addView(scanIntInput)
         container.addView(TextView(this).apply { text = "\nSwitch Cooldown (seconds):" })
         container.addView(cooldownInput)
-        container.addView(TextView(this).apply { text = "\nRoaming Strategy:" })
-        container.addView(segRow)
 
         AlertDialog.Builder(this)
             .setTitle("Parameter Configuration")
@@ -677,7 +597,6 @@ class MainActivity : AppCompatActivity() {
                 val p  = portInput.text.toString().trim()
                 val scanInt = scanIntInput.text.toString().trim().toLongOrNull() ?: 35L
                 val cooldown = cooldownInput.text.toString().trim().toLongOrNull() ?: 5L
-                val newMode = selectedMode
 
                 if (ip.isNotEmpty() && p.isNotEmpty()) {
                     val port = p.toInt()
@@ -686,9 +605,9 @@ class MainActivity : AppCompatActivity() {
                         .putInt(KEY_PORT, port)
                         .putLong(KEY_SCAN_INTERVAL, scanInt * 1000)
                         .putLong(KEY_ROAMING_COOLDOWN, cooldown * 1000)
-                        .putString(KEY_ROAMING_MODE, newMode.name)
+                        .putString(KEY_ROAMING_MODE, RoamingMode.ML.name)
                         .apply()
-                    scanService?.setRoamingMode(newMode)
+                    scanService?.setRoamingMode(RoamingMode.ML)
                     scanService?.setRoamingCooldown(cooldown * 1000)
                     if (isBound) {
                         scanService?.updateConfig(ip, port, scanInt * 1000)
