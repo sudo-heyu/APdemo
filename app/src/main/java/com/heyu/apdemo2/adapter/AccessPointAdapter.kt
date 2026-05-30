@@ -15,68 +15,6 @@ class AccessPointAdapter(
     private var scannedAccessPoints: List<AccessPoint> = emptyList()
 ) : RecyclerView.Adapter<AccessPointAdapter.ViewHolder>() {
 
-    companion object {
-        // Demo APs for screenshot (置顶显示，按分数从高到低排列)
-        private val DEMO_APS = listOf(
-            AccessPoint(
-                ssid = "Ideal",
-                bssid = "00:00:00:00:00:01",
-                rssi = -68,
-                frequency = 2437,
-                capabilities = "[WPA2-PSK-CCMP]",
-                score = 97,
-                reason = "Your Wi-Fi connection status is excellent, and the network quality is very good. The current internet speed is fast, the signal strength is excellent, and there is very little surrounding interference, providing a smooth overall experience.\n"
-            ),
-            AccessPoint(
-                ssid = "High-Density Congestion",
-                bssid = "00:00:00:00:00:02",
-                rssi = -45,
-                frequency = 5180,
-                capabilities = "[WPA2-PSK-CCMP]",
-                score = 74,
-                reason = "Your Wi-Fi connection quality is average. The main reason is that the current network environment is somewhat congested, which may occasionally affect internet speed. However, your signal is strong, interference is minimal, and the overall connection is stable.\n"
-            ),
-            AccessPoint(
-                ssid = "Backhaul Constrained",
-                bssid = "00:00:00:00:00:03",
-                rssi = -60,
-                frequency = 2437,
-                capabilities = "[WPA2-PSK-CCMP]",
-                score = 72,
-                reason = "Your Wi-Fi connection quality is average. Although the signal is strong and interference is very low, the network is occasionally congested, causing the internet speed to be sometimes unstable.\n"
-            ),
-            AccessPoint(
-                ssid = "Co-channel Interference",
-                bssid = "00:00:00:00:00:04",
-                rssi = -55,
-                frequency = 2412,
-                capabilities = "[WPA2-PSK-CCMP]",
-                score = 59,
-                reason = "Your Wi-Fi connection quality is average. Although the signal is strong and interference is very low, the network is occasionally congested, causing the internet speed to be slow at times.\n"
-            ),
-            AccessPoint(
-                ssid = "Legacy Standard",
-                bssid = "00:00:00:00:00:05",
-                rssi = -58,
-                frequency = 2412,
-                capabilities = "[WPA-PSK-CCMP]",
-                score = 49,
-                reason = "Your Wi-Fi connection quality is poor. The main reason is that the current network environment is very congested, causing unstable data transmission speeds that can be very slow at times. However, your device has strong signal reception and very little interference.\n"
-            ),
-            AccessPoint(
-                ssid = "Internet Outage",
-                bssid = "00:00:00:00:00:06",
-                rssi = -42,
-                frequency = 2437,
-                capabilities = "[WPA-PSK-CCMP]",
-                score = 30,
-                reason = "Your Wi-Fi connection quality is poor. The main reason is that the current network environment is very congested, causing unstable data transmission speeds that can be very slow at times.\n"
-            )
-        )
-
-        private const val DEMO_COUNT = 6
-    }
-
     interface OnItemClickListener {
         fun onItemClick(ap: AccessPoint)
     }
@@ -102,12 +40,7 @@ class AccessPointAdapter(
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        // 位置 0-5: Demo APs, 位置 6+: Scanned APs
-        val ap = if (position < DEMO_COUNT) {
-            DEMO_APS[position]
-        } else {
-            scannedAccessPoints[position - DEMO_COUNT]
-        }
+        val ap = scannedAccessPoints[position]
 
         val isPinned = ap.ssid == pinnedSsid
 
@@ -153,8 +86,7 @@ class AccessPointAdapter(
         }
     }
 
-    // Demo APs (6) + Scanned APs
-    override fun getItemCount(): Int = DEMO_COUNT + scannedAccessPoints.size
+    override fun getItemCount(): Int = scannedAccessPoints.size
 
     /**
      * Update scanned data (sorted by score descending, then rssi)
@@ -176,9 +108,6 @@ class AccessPointAdapter(
     }
 
     fun findBySsid(ssid: String): AccessPoint? {
-        // Search in demo APs first
-        DEMO_APS.find { it.ssid == ssid }?.let { return it }
-        // Then in scanned APs
         return scannedAccessPoints.find { it.ssid == ssid }
     }
 
