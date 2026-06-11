@@ -77,34 +77,6 @@ class ApiService {
     }
 
     /**
-     * Upload roaming algorithm log to backend
-     */
-    fun uploadRoamingLog(ip: String, port: Int, logText: String, callback: SimpleCallback) {
-        val url = "http://$ip:$port/api/roaming_log"
-        val payload = mapOf(
-            "device_model" to android.os.Build.MODEL,
-            "exported_at" to java.text.SimpleDateFormat(
-                "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault()
-            ).format(java.util.Date()),
-            "logs" to logText
-        )
-        val body = gson.toJson(payload).toRequestBody(JSON)
-        val request = Request.Builder().url(url).post(body).build()
-
-        client.newCall(request).enqueue(object : okhttp3.Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                callback.onError(e.message ?: "Network error")
-            }
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    if (it.isSuccessful) callback.onSuccess()
-                    else callback.onError("Server error: ${it.code}")
-                }
-            }
-        })
-    }
-
-    /**
      * Batch upload results after 4 scans and receive scores
      */
     fun uploadScanResults(ip: String, port: Int, accessPoints: List<AccessPoint>, callback: BatchCallback) {

@@ -34,8 +34,14 @@ class HelpFragment : Fragment() {
         view.findViewById<MaterialCardView>(R.id.card_auto_connect).setOnClickListener {
             showAutoConnectDetail()
         }
+        view.findViewById<MaterialCardView>(R.id.card_wifi_scan_throttling)?.setOnClickListener {
+            showWifiScanThrottlingDetail()
+        }
         view.findViewById<MaterialCardView>(R.id.card_roaming_log)?.setOnClickListener {
             showRoamingLog()
+        }
+        view.findViewById<MaterialCardView>(R.id.card_common_failures)?.setOnClickListener {
+            showCommonFailureReasonsDetail()
         }
     }
 
@@ -181,7 +187,104 @@ class HelpFragment : Fragment() {
             .show()
     }
 
-    // ── Help Content ──────────────────────────────────────────────────────────────
+    private fun showWifiScanThrottlingDetail() {
+        val ctx = requireContext()
+        val dp = resources.displayMetrics.density
+        val padH = (32 * dp).toInt()
+        val padV = (16 * dp).toInt()
+
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Text description
+        root.addView(TextView(ctx).apply {
+            text = SCAN_THROTTLING_CONTENT
+            textSize = 14f
+            setTextColor(0xFF444444.toInt())
+            setLineSpacing(0f, 1.5f)
+            setPadding(padH, padV, padH, padV)
+        })
+
+        // 4 guide images
+        val guides = listOf(
+            Pair(R.drawable.step_1, "Step 1: Open Settings → About Phone → Tap \"Version Number\" 7 times"),
+            Pair(R.drawable.step_2, "Step 2: Return to Settings → System → Enable \"Developer Options\""),
+            Pair(R.drawable.step_3, "Step 3: In Developer Options, enable \"USB Debugging\""),
+            Pair(R.drawable.step_4, "Step 4: Find \"Wi-Fi Scan Throttling\" and turn it OFF")
+        )
+
+        for ((drawableId, caption) in guides) {
+            root.addView(TextView(ctx).apply {
+                text = caption
+                textSize = 13f
+                setTextColor(0xFF555555.toInt())
+                setPadding(padH, (8 * dp).toInt(), padH, (4 * dp).toInt())
+            })
+            root.addView(ImageView(ctx).apply {
+                setImageResource(drawableId)
+                adjustViewBounds = true
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { lp ->
+                    lp.setMargins(padH, 0, padH, padV)
+                }
+            })
+        }
+
+        AlertDialog.Builder(ctx)
+            .setTitle("Release WiFi Scan Throttle")
+            .setView(ScrollView(ctx).also { it.addView(root) })
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun showCommonFailureReasonsDetail() {
+        val ctx = requireContext()
+        val dp = resources.displayMetrics.density
+        val padH = (32 * dp).toInt()
+        val padV = (16 * dp).toInt()
+
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Text description
+        root.addView(TextView(ctx).apply {
+            text = COMMON_FAILURE_CONTENT
+            textSize = 14f
+            setTextColor(0xFF444444.toInt())
+            setLineSpacing(0f, 1.5f)
+            setPadding(padH, padV, padH, padV)
+        })
+
+        // Guide image
+        root.addView(TextView(ctx).apply {
+            text = "Where to enter the password"
+            textSize = 13f
+            setTextColor(0xFF555555.toInt())
+            setPadding(padH, (8 * dp).toInt(), padH, (4 * dp).toInt())
+        })
+        root.addView(ImageView(ctx).apply {
+            setImageResource(R.drawable.password)
+            adjustViewBounds = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { lp ->
+                lp.setMargins(padH, 0, padH, padV)
+            }
+        })
+
+        AlertDialog.Builder(ctx)
+            .setTitle("Common causes of network selection failure")
+            .setView(ScrollView(ctx).also { it.addView(root) })
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // ── Help Content ─────────────────────────────────────────────────────────────
 
     private val BACKGROUND_CONTENT = """
 This app uses foreground service + WakeLock to keep running in background without interruption, but domestic manufacturers' systems may impose additional restrictions on background activities. Please configure according to your phone brand:
@@ -248,5 +351,38 @@ Settings → Accessibility → Installed apps → APdemo → Enable
 
 【General】
 Settings → Accessibility (or Accessibility features) → Installed services → APdemo → Enable
+    """.trimIndent()
+
+    private val SCAN_THROTTLING_CONTENT = """
+The roaming algorithm relies on real-time WiFi signal strength (RSSI) to decide when to switch APs. Android's "Wi-Fi Scan Throttling" restricts scanning frequency by default:
+
+• Foreground: max 4 scans per 2 minutes
+• Background: max 1 scan per 30 minutes
+
+This severely delays roaming decisions and may cause you to stay on a weak signal for too long. Please follow the steps below to disable this restriction.
+
+⚠ If you cannot find "Wi-Fi Scan Throttling" in Developer Options, try:
+  1. Make sure USB Debugging is enabled first (some OEMs hide advanced options until USB debugging is on).
+  2. Search for "scan" inside Developer Options using the search bar at the top.
+  3. On some Samsung devices the option is under "Wi-Fi" → "Wi-Fi scan throttling".
+    """.trimIndent()
+
+    private val COMMON_FAILURE_CONTENT = """
+If the app is not switching APs as expected, check the following common causes:
+
+【1. Password not entered】
+For security reasons, the roaming algorithm will NOT attempt to connect to an AP whose password has not been saved. Even if the AP has a high roaming score, it will be skipped if the password is missing.
+→ Tap the AP in the list and enter its password. Once saved, the AP becomes eligible for automatic roaming.
+
+【2. "Roaming" option is disabled】
+The app must have roaming enabled to perform automatic AP switching. Check the main screen or settings to ensure the Roaming toggle is turned ON.
+
+【3. Accessibility service not enabled】
+On some devices, the system blocks automatic WiFi connections unless the app's accessibility service is active. Enabling it allows one-tap connection without popup confirmation.
+→ See "Cannot auto-connect?" above for the exact path on your device.
+
+【4. No score requested】
+Only APs that have been scored by the roaming algorithm participate in network selection. If you haven't triggered a scan or the scoring module hasn't run yet, no AP will be evaluated for roaming.
+→ Make sure a scan has been performed and scores are visible in the AP list.
     """.trimIndent()
 }

@@ -22,8 +22,4 @@
         android:id="@+id/action_request_scores"
         android:title="Request Scores"
         app:showAsAction="never" />
-    <item
-        android:id="@+id/action_export_log"
-        android:title="Export Log"
-        app:showAsAction="never" />
 </menu>

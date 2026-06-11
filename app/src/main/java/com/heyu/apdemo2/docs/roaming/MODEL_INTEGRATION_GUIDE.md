@@ -98,13 +98,6 @@ python convert_to_onnx.py
 # Output: ap_roaming_model_video.onnx + SCALER parameters
 ```
 
-For **XGBoost** models:
-```bash
-cd docs/dense_ap_selection/
-python convert_to_onnx.py
-# Note: XGBoost requires feature names f0-f9 for onnxmltools
-```
-
 **Important:** If conversion fails due to feature names, modify the booster:
 ```python
 import xgboost as xgb
@@ -163,17 +156,14 @@ InconsistentVersionWarning: Trying to unpickle from version X.X.X
 ```
 **Solution:** This is a warning only; scaler values are still correct.
 
-## Model Comparison
-
-| Feature | LightGBM (current) | XGBoost (dense) |
-|---------|-------------------|-----------------|
-| File | `ap_roaming_model_video.onnx` | `ap_roaming_model_dense.onnx` |
-| Size | ~1.1 MB | ~278 KB |
-| Trees | - | 220 |
-| Source | `docs/new_ap_selection/` | `docs/dense_ap_selection/` |
-
 ## Related Documentation
 
 - `docs/new_ap_selection/README.md` - LightGBM model details
-- `docs/dense_ap_selection/README.md` - XGBoost dense model details
 - `docs/roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md` - Roaming algorithm overview
+
+## 文档更新记录
+
+| 日期 | 更新内容 |
+|------|----------|
+| 2026-06-11 | 移除对已删除的 `dense_ap_selection` 目录和 XGBoost Dense 模型的引用 |
+| 2026-04-14 | 初始版本，整合模型切换指南、转换故障排除和对比说明 |

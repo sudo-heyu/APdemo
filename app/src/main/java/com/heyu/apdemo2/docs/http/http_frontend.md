@@ -75,43 +75,17 @@
 
 ---
 
-## 2. 导出漫游算法日志
+## 2. 废弃的接口
 
-**接口描述**：将设备本地的漫游算法日志一次性上传到后端，供离线分析使用。由用户手动触发（工具栏溢出菜单 → "导出日志"）。
+### 导出漫游算法日志（已移除）
 
-- **URL**: `http://<IP>:<PORT>/api/roaming_log`
-- **Method**: `POST`
-- **Content-Type**: `application/json`
+此功能已从当前版本中移除。客户端不再支持将本地漫游日志上传到后端。
+原接口 `POST /api/roaming_log` 已废弃，相关 UI 菜单项（工具栏溢出菜单 → "Export Log"）已删除。
 
-### 请求格式 (JSON)
-
-```json
-{
-  "device_model": "Pixel 6 Pro",
-  "exported_at": "2026-04-09T14:32:00",
-  "logs": "[14:30:01] 【开始扫描】\n[14:30:02] 扫描完成: 4个AP\n..."
-}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `device_model` | string | 设备型号，来自 `Build.MODEL` |
-| `exported_at` | string | 导出时间，ISO 8601 格式（本地时间，无时区） |
-| `logs` | string | 完整日志文本，行间以 `\n` 分隔，含 HTML 标签（用于 WebView 渲染颜色/表格，后端存储时可原样保留或按需剥除） |
-
-### 响应格式 (JSON)
-
-```json
-{ "status": "success" }
-```
-
-后端只需返回 HTTP 200 即可，客户端不解析响应体内容。
-
-### 注意事项
-
-- 日志内容包含 HTML 标签（`<span>`、`<table>` 等），为漫游日志 WebView 渲染用，后端可选择剥除后再存储
-- 单次导出上限约 500 行 / 512 KB，超限后日志管理器会自动裁剪最旧内容
-- 接口无鉴权，建议后端限制仅内网访问
+**保留的日志功能**:
+- 本地日志存储（`RoamingLogManager.kt`）：1MB 自动清空
+- 实时日志查看（主页面 toolbar 书本图标，AlertDialog + WebView）
+- 日志清空（日志对话框 "Clear" 按钮）
 
 ---
 

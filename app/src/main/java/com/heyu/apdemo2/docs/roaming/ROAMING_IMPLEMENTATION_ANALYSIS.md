@@ -64,7 +64,7 @@ RSSI顺延选择（ML模式新增）
     ↓
 决策是否切换
     ├── 当前已是最优 → 跳过
-    ├── 冷却期内 (30秒) → 跳过
+    ├── 冷却期内 (默认5秒，可配置) → 跳过
     └── 触发连接切换
 ```
 
@@ -96,12 +96,13 @@ val connectableAps = currentAccessPoints.filter { ap ->
 private fun triggerRoamingConnection(targetAp: AccessPoint) {
     val password = PasswordStore.get(this, targetAp.ssid) ?: ""
     val isOpen = !targetAp.isSecured()
-    // 统一使用 WifiNetworkSpecifier
-    connectWithSpecifier(targetAp.ssid, password, callback)
+    // 使用无障碍服务实现后台自动切换
+    val a11y = WifiAccessibilityService.getInstance()
+    a11y?.connectFromBackground(targetAp.ssid, password, isOpen, callback)
 }
 ```
 
-漫游和手动连接使用完全相同的 `connectWithSpecifier()` 方法。
+漫游和手动连接均使用 `WifiAccessibilityService` 无障碍服务完成实际系统切换。
 
 ### 1.6 评分漫游选择策略
 
@@ -246,7 +247,32 @@ pollRunnable 每 pollInterval 执行 queryScoresOnly()
 
 **可能的替代方案**: `WifiManager.addNetworkSuggestions()` — 系统自动切换，首次仅需通知权限，但无法精确控制切换时机。
 
-### 4.2 模型特征简化 ⚠️ 轻微
+### 4.2 Android Wi-Fi Scan Throttling（扫描节流）⚠️
+
+**问题**: Android 9+（API 28）系统对前台应用限制每 2 分钟最多 4 次 `wifiManager.startScan()` 调用。超出后扫描请求被系统静默拒绝（`startScan()` 返回 `false`）。
+
+**影响**:
+- 默认 35 秒扫描间隔在节流环境下理论上不会触发（2 分钟内约 3.4 次），但实际系统行为可能更严格
+- 扫描被节流时，`WifiScanner` 回退到缓存结果（`scanResults`），RSSI 数据不够新鲜
+- 日志中会出现 "Scan throttled, using cached results"，影响漫游决策实时性
+
+**代码处理**:
+```kotlin
+// WifiScanner.kt
+val startSuccess = wifiManager.startScan()
+if (!startSuccess) {
+    Log.w(TAG, "Scan throttled, using cached results")
+    // 回退到缓存结果
+}
+```
+
+**解除方式（仅开发/测试环境）**:
+设置 → 开发者选项 → 关闭 "Wi-Fi scan throttling"
+
+**生产环境建议**:
+普通用户设备默认开启节流，不可依赖用户手动关闭。需在代码层面接受扫描频率上限，被节流时增加智能退避或依赖缓存数据。
+
+### 4.3 模型特征简化 ⚠️ 轻微
 
 ```kotlin
 // ApSelectionManager.kt
@@ -256,7 +282,7 @@ val connB = apB.rssi > -90
 
 使用 RSSI 阈值近似连接状态，非真实检测。
 
-### 4.3 StandardScaler 参数 ✅ 已修复 (2026-04-14)
+### 4.4 StandardScaler 参数 ✅ 已修复 (2026-04-14)
 
 **原问题**: Android 端 `ApRoamingModel.kt` 中的 StandardScaler 参数（`SCALER_MEAN` 和 `SCALER_SCALE`）使用了占位值，而非训练时真实计算的值，导致特征标准化错误，模型预测不准确。
 
@@ -281,18 +307,18 @@ SCALER_SCALE = doubleArrayOf(
 
 **注意**: 上述参数为示例值，实际值请以 `convert_to_onnx.py` 打印为准。
 
-### 4.4 冷却期逻辑
+### 4.5 冷却期逻辑
 
-- 30秒冷却期对手动切换和自动切换统一生效
+- 冷却期默认 **5秒**（用户可在设置中配置），对手动切换和自动切换统一生效
 - 冷却期内推荐切换只记录日志，无用户提示
+- 记录时间戳：`lastRoamingSwitchTime = System.currentTimeMillis()`
 
-### 4.5 日志持久化
+### 4.6 日志持久化
 
 - 超过 1MB 自动清空，可能丢失关键历史
 - 无按日期分文件存储
-- 无日志导出功能
 
-### 4.6 本地 AP 性能缓存 ✅ 新增 (2026-04-05)
+### 4.7 本地 AP 性能缓存 ✅ 新增 (2026-04-05)
 
 **功能**: 纯本地缓存用户实际连接过的 AP 性能数据，用于辅助选网决策。
 
@@ -345,7 +371,7 @@ SCALER_SCALE = doubleArrayOf(
 | 日志管理 | `RoamingLogManager.kt` | `log()`, `addListener()` |
 | 日志查看(主页) | `MainActivity.kt` | `showRoamingLog()` |
 | 日志查看(帮助) | `HelpFragment.kt` | `showRoamingLog()` |
-| Specifier连接 | `ScanForegroundService.kt` | `connectWithSpecifier()` |
+| 无障碍服务连接 | `ScanForegroundService.kt` | `triggerRoamingConnection()` 内调用 `WifiAccessibilityService` |
 | 性能缓存 | `ApPerformanceCache.kt` | `sample()`, `getPerformanceSummary()` |
 | 性能监控服务 | `ApPerformanceMonitor.kt` | `startMonitoring()`, `sampleCurrentAp()` |
 | 监控服务生命周期 | `MainActivity.kt` | `startAndBindService()` 中启动, `onStop()` 中停止 |
@@ -364,3 +390,7 @@ SCALER_SCALE = doubleArrayOf(
 | 2026-04-14 | 更新：Video Only 模型（10维特征），标准化参数通过 convert_to_onnx.py 生成 |
 | 2026-04-18 | 更新：评分漫游增加 RSSI 过滤（-70dBm）和分差阈值判断（≤10选RSSI高者） |
 | 2026-04-20 | 更新：ML漫游增加 RSSI 顺延选择，跳过 RSSI < -80 dBm 的AP |
+| 2026-06-11 | 新增：Android Wi-Fi Scan Throttling 扫描节流限制说明 |
+| 2026-06-11 | 修正：冷却期默认时间为 5 秒（可配置），原文档误写为 30 秒 |
+| 2026-06-11 | 修正：连接触发方式更新为无障碍服务，移除过时的 WifiNetworkSpecifier 引用 |
+| 2026-06-11 | 删除：导出漫游日志功能（移除 UI 菜单项、代码实现和 HTTP 接口） |

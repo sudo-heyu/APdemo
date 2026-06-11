@@ -35,7 +35,6 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.heyu.apdemo2.R
-import com.heyu.apdemo2.network.ApiService
 import com.heyu.apdemo2.roaming.RoamingLogManager
 import com.heyu.apdemo2.service.ScanForegroundService
 import com.heyu.apdemo2.service.WifiAccessibilityService
@@ -425,7 +424,6 @@ class MainActivity : AppCompatActivity() {
             R.id.action_settings -> { showServerInputDialog(); true }
             R.id.action_roaming_log -> { showRoamingLog(); true }
             R.id.action_request_scores -> { requestScores(); true }
-            R.id.action_export_log -> { exportRoamingLog(); true }
             R.id.action_auto_roaming -> {
                 // Click event handled in setupRoamingButton
                 true
@@ -526,29 +524,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun exportRoamingLog() {
-        val (ip, port) = getServerAddress()
-        if (ip.isNullOrBlank() || port == -1) {
-            Toast.makeText(this, "Please configure server address first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val logManager = RoamingLogManager.getInstance(this)
-        val logs = logManager.getLogs()
-        if (logs == "No logs available") {
-            Toast.makeText(this, "No logs to export", Toast.LENGTH_SHORT).show()
-            return
-        }
-        Toast.makeText(this, "Exporting...", Toast.LENGTH_SHORT).show()
-        ApiService().uploadRoamingLog(ip, port, logs, object : ApiService.SimpleCallback {
-            override fun onSuccess() {
-                runOnUiThread { Toast.makeText(this@MainActivity, "Log exported successfully", Toast.LENGTH_SHORT).show() }
-            }
-            override fun onError(error: String) {
-                runOnUiThread { Toast.makeText(this@MainActivity, "Export failed: $error", Toast.LENGTH_LONG).show() }
-            }
-        })
-    }
-
     // ── Configuration Dialog ──────────────────────────────────────────────────────────
 
     private fun getServerAddress(): Pair<String?, Int> {
@@ -582,7 +557,9 @@ class MainActivity : AppCompatActivity() {
             setText(currentCooldown.toString())
         }
 
+        container.addView(TextView(this).apply { text = "Server IP:" })
         container.addView(ipInput)
+        container.addView(TextView(this).apply { text = "\nPort:" })
         container.addView(portInput)
         container.addView(TextView(this).apply { text = "\nScan Interval (seconds):" })
         container.addView(scanIntInput)

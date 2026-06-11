@@ -1,4 +1,4 @@
-# 新 AP 选择模型 (Video Only)
+new# 新 AP 选择模型 (Video Only)
 
 本目录包含视频业务专用的 AP 漫游选择模型，基于 LightGBM 实现 Pairwise AP 比较算法。
 
@@ -7,7 +7,6 @@
 | 文件 | 说明 |
 |------|------|
 | `model_video_only.pkl` | LightGBM 模型文件（含 StandardScaler），视频业务专用，无 biz 特征 |
-| `infer.py` | Python 批量推理脚本，支持 CSV 输入输出 |
 | `convert_to_onnx.py` | 转换为 ONNX 格式的脚本，生成 Android 可用模型并打印标准化参数 |
 | `ap_roaming_model_video.onnx` | 生成的 ONNX 模型（需复制到 `app/src/main/assets/`） |
 
@@ -99,26 +98,16 @@ D/[ApRoamingModel]: 视频专用 ONNX 模型加载成功
 | 使用场景 | 通用场景 | 视频业务专用 |
 | 文件大小 | 较大 | 较小 |
 
-## Python 批量推理示例
-
-```bash
-# 准备 CSV 文件（必须包含列: rssi_a, rssi_b, score_a, score_b, a_conn, b_conn）
-python infer.py --csv input.csv --rmin -90 --rmax -30 --output results.csv
-
-# 查看结果
-cat results.csv
-# 输出: idx, prob_a_better, prediction, pred_label
-```
-
 ## 注意事项
 
 1. **特征顺序必须严格一致**: Python 训练和 Kotlin 推理的特征顺序必须相同
 2. **标准化参数必须匹配**: 必须使用训练时计算的 `SCALER_MEAN` 和 `SCALER_SCALE`
-3. **RSSI 范围**: 归一化范围 [-90, -30] 与 `infer.py` 默认值一致
+3. **RSSI 范围**: 归一化范围 [-90, -30]
 4. **模型降级**: 如果 ONNX 模型加载失败，`ApRoamingModel` 会返回 0.5（同等概率）
 
 ## 文档更新记录
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-06-11 | 移除已删除的 `infer.py` 引用，仅保留模型转换相关说明 |
 | 2026-04-14 | 初始版本，完整说明 Video Only 模型的特征、转换步骤和集成方法 |
