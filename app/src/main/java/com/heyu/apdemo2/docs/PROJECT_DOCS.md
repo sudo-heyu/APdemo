@@ -2,7 +2,7 @@
 
 ## 相关文档
 
-- [WiFi 连接实现细节](connection/WIFI_CONNECTION_SPECIFIER.md) - WifiNetworkSpecifier 详细实现、废弃模块说明
+- [WiFi 连接实现细节](connection/WIFI_CONNECTION.md) - 使用无障碍服务（AccessibilityService）实现系统级 WiFi 切换
 - [HTTP 接口文档](http/http_frontend.md) - 后端 API 接口规范
 - [漫游实现分析](roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md) - 漫游算法与日志系统分析
 - [新AP选择模型](new_ap_selection/README.md) - Video Only 模型特征、转换与集成指南
@@ -13,7 +13,7 @@
 
 APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
 1. **WiFi 扫描与评分** - 扫描周围热点并获取服务器评分
-2. **一键连接** - 使用 WifiNetworkSpecifier 实现系统级 WiFi 连接
+2. **一键连接** - 使用无障碍服务实现 WiFi 切换
 3. **智能漫游** - 基于 LightGBM 模型的自动 AP 切换算法
 4. **漫游日志** - 完整的算法执行日志记录与实时查看
 
@@ -40,29 +40,31 @@ APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
 - **后台保活**: 前台服务 + WakeLock + AlarmManager 确保后台运行
 - **降级模式**: 服务器不可用时，使用默认评分（50分）仍然执行漫游评估
 
-### 2.2 点击连接（Specifier 方式）✅ 已实现
+### 2.2 点击连接（无障碍服务方式）✅ 已实现
 
-- **连接方式**: 使用 `WifiNetworkSpecifier` (Android 10+)
+- **连接方式**: 使用 `WifiAccessibilityService`（无障碍服务）
 - **连接流程**:
     1. 用户点击列表中的 AP
-    2. 系统弹出连接确认弹窗
-    3. 用户确认后完成系统级 WiFi 切换
-    4. 支持无障碍模式（开启后无需弹窗确认）
+    2. `ScanForegroundService` 准备无障碍连接目标（不立即打开设置）
+    3. `WifiFragment` 打开系统 WiFi 设置页面
+    4. 无障碍服务自动识别目标 SSID，自动点击"连接"按钮并输入密码
+    5. 系统完成 WiFi 切换后回调通知 UI 更新
 - **状态管理**:
-    - 区分"系统级连接"（有互联网）和"本地连接"（仅应用内）
     - 密码自动保存，下次连接无需输入
-    - 支持断开当前连接
+    - 支持断开当前连接（仅清除本地状态，无法强制断开系统连接）
+    - 无障碍服务未开启时，首次启动会弹窗引导用户前往系统设置开启
 
 **相关代码**:
 - `connection/PasswordStore.kt` - 密码本地存储
-- `service/ScanForegroundService.kt` - Specifier 连接实现（`connectWithSpecifier()`）
+- `service/ScanForegroundService.kt` - 连接准备与触发（`connectToNetwork()`）
+- `service/WifiAccessibilityService.kt` - 无障碍服务自动连接实现
 
 ### 2.3 智能漫游 ⚠️ 框架完成，连接层受限
 
 - **算法架构**:
     - **Borda 排名**: 根据 RSSI 和众包评分进行初步筛选
     - **Pairwise 比较**: 使用 LightGBM ONNX 模型比较 AP 对
-    - **决策逻辑**: 冷却期检查（30s）、最优 AP 判断
+    - **决策逻辑**: 冷却期检查（默认5s，可配置）、最优 AP 判断
 - **模型文件**:
     - `assets/ap_roaming_model_video.onnx` - Video Only 专用模型（10维特征）
     - [转换文档](new_ap_selection/README.md) - 模型转换与集成指南
@@ -72,12 +74,12 @@ APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
 - **当前状态**:
     - ✅ 算法框架实现完成（Borda + Pairwise）
     - ✅ 自动漫游开关 UI（toolbar 按钮）
-    - ✅ 漫游和手动连接已统一使用 `connectWithSpecifier()`
+    - ✅ 漫游和手动连接统一使用无障碍服务
     - ✅ 密码过滤：跳过未保存密码的加密 AP
     - ✅ 服务器失败降级：使用默认评分仍执行评估
     - ✅ 新模型集成：Video Only 模型（10维特征，无 biz 特征）
     - ✅ 漫游策略固化为 ML：配置界面移除 ML/Score 切换，默认始终使用 ML 选网
-    - ⚠️ WifiNetworkSpecifier 每次连接需用户确认系统弹窗，无法完全自动化
+    - ⚠️ 无障碍服务需要用户在系统设置中手动开启，未开启时无法自动漫游
 
 **相关代码**:
 - `roaming/ApSelectionManager.kt` - 选网主逻辑
@@ -129,8 +131,8 @@ APdemo2 是一个 Android WiFi 智能切换应用，核心功能包括：
 
 ```
 com.heyu.apdemo2
-├── connection/          # WiFi 连接相关
-│   ├── WifiConnector.kt      # 连接逻辑封装（Android 9 以下）
+├── connection/          # WiFi 连接相关（保留但已废弃）
+│   ├── WifiConnector.kt      # 连接逻辑封装（Android 9 以下，已废弃）
 │   └── PasswordStore.kt      # 密码存储
 ├── roaming/             # 漫游算法
 │   ├── ApSelectionManager.kt # 选网主逻辑
@@ -138,9 +140,10 @@ com.heyu.apdemo2
 │   ├── ApPairwisePredictor.kt# 预测器接口
 │   └── RoamingLogManager.kt  # 日志管理（含实时监听）
 ├── service/             # 后台服务
-│   └── ScanForegroundService.kt  # 扫描、评分同步与漫游服务
+│   ├── ScanForegroundService.kt  # 扫描、评分同步与漫游服务
+│   └── WifiAccessibilityService.kt # 无障碍自动连接服务（当前主要连接方式）
 ├── ui/                  # UI 层
-│   ├── MainActivity.kt       # 主活动（含漫游日志入口）
+│   ├── MainActivity.kt       # 主活动（含漫游日志入口、无障碍引导）
 │   ├── WifiFragment.kt       # WiFi 列表页面
 │   └── HelpFragment.kt       # 帮助页面
 ├── model/               # 数据模型
@@ -188,19 +191,19 @@ scheduleNextScan() — 启动轮询 + 设置下次扫描闹钟
     ↓
 检查是否已连接 → 是 → 显示断开弹窗
     ↓ 否
-检查是否开放网络 → 是 → 直接连接
+检查是否开放网络 → 是 → 准备无障碍连接
     ↓ 否
-检查是否有保存密码 → 是 → 直接连接
+检查是否有保存密码 → 是 → 准备无障碍连接
     ↓ 否
 显示密码输入弹窗
     ↓
-调用 connectWithSpecifier()
+ScanForegroundService.connectToNetwork() → 准备无障碍服务目标
     ↓
-系统弹出连接确认弹窗
+WifiFragment 打开系统 WiFi 设置页面
     ↓
-用户确认 → 系统完成 WiFi 切换
+WifiAccessibilityService 自动识别目标 SSID 并点击连接
     ↓
-回调 onConnected → 更新 UI 状态
+系统完成 WiFi 切换 → 回调 onConnected → 更新 UI 状态
 ```
 
 ### 5.3 漫游算法流程
@@ -218,29 +221,28 @@ ApSelectionManager.selectBestAp(可连接AP列表)
     ↓
 决策逻辑
     ├── 当前已是最优 → 跳过
-    ├── 冷却期内（30s）→ 跳过
+    ├── 冷却期内（默认5s，可配置）→ 跳过
     └── 需要切换 → triggerRoamingConnection()
     ↓
-connectWithSpecifier() — 统一连接机制
+WifiAccessibilityService.connectFromBackground() — 无障碍后台自动切换
 ```
 
 ---
 
 ## 6. 已知限制
 
-1. **WifiNetworkSpecifier 需要用户确认**: 每次连接系统会弹出确认对话框，无法实现完全自动的漫游切换
-2. **Specifier 连接为应用级**: `bindProcessToNetwork()` 只影响当前进程，系统 WiFi 状态栏不一定更新
-3. **模型特征简化**: 连接状态判断使用 `RSSI > -90` 近似，非真实连接状态
-4. **冷却期不区分手动/自动**: 30秒冷却期对所有切换统一生效
+1. **无障碍服务需要手动开启**: 用户必须先在系统设置中开启无障碍服务，否则无法自动完成 WiFi 切换。首次启动应用会引导用户前往设置
+2. **模型特征简化**: 连接状态判断使用 `RSSI > -90` 近似，非真实连接状态
+3. **冷却期不区分手动/自动**: 默认5秒冷却期（用户可在设置中配置）对所有切换统一生效
 
 ---
 
 ## 7. 使用说明
 
-1. **启动应用**: 首次启动需授予位置权限和通知权限
+1. **启动应用**: 首次启动需授予位置权限和通知权限，并前往系统设置开启无障碍服务
 2. **配置服务器**: 点击右上角设置图标，输入服务器 IP、端口、扫描间隔和后端请求间隔
-3. **连接 WiFi**: 点击列表中的 AP，按系统弹窗确认连接
-4. **开启自动漫游**: 点击顶部"漫游"按钮（需先保存过密码）
+3. **连接 WiFi**: 点击列表中的 AP，应用会自动打开系统 WiFi 设置，无障碍服务自动完成连接
+4. **开启自动漫游**: 点击顶部"漫游"按钮（需先保存过密码，且无障碍服务已开启）
 5. **查看漫游日志**: 点击顶部书本图标，日志实时更新
 
 ---
@@ -250,9 +252,13 @@ connectWithSpecifier() — 统一连接机制
 | 日期 | 更新内容 |
 |------|----------|
 | 2025-04-02 | 重构文档结构，增加待实现功能清单，补充漫游和日志模块状态 |
-| 2025-04-02 | 统一连接机制：漫游和手动连接都使用 connectWithSpecifier() |
+| 2025-04-02 | 统一连接机制：漫游和手动连接都使用无障碍服务 |
 | 2026-04-02 | 扫描简化为单次模式（默认35s间隔），后端轮询独立可配（默认10s） |
 | 2026-04-02 | 漫游评估增加密码过滤和服务器失败降级模式 |
 | 2026-04-02 | 漫游日志入口移至主页面 toolbar 书本图标，支持实时更新 |
 | 2026-04-14 | 新增 Video Only 模型（10维特征），更新文档和模型转换说明 |
+| 2026-06-11 | 修正连接方式描述：当前实际使用无障碍服务，移除过时的 WifiNetworkSpecifier 和 connectWithSpecifier 引用 |
+| 2026-06-11 | 清理冗余文档：删除 CHANGELOG、PROJECT_SUMMARY、requirements、dense_ap_selection 等 |
 | 2026-04-15 | 新增弱信号 AP 保护机制（20秒生命期），防止列表抖动 |
+| 2026-06-11 | 修正：冷却期默认时间为 5 秒（可配置），原文档误写为 30 秒 |
+| 2026-06-11 | 新增：Android Wi-Fi Scan Throttling 扫描节流限制说明（开发者选项可关闭） |

@@ -14,7 +14,7 @@
 
 | 修改内容 | 需更新的文档 |
 |----------|-------------|
-| WiFi 连接逻辑 | `docs/connection/WIFI_CONNECTION_SPECIFIER.md` |
+| WiFi 连接逻辑 | `docs/connection/WIFI_CONNECTION.md` |
 | 漫游算法 | `docs/roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md` |
 | 漫游日志 | `docs/roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md` |
 | 新增功能模块 | `docs/PROJECT_DOCS.md` |
