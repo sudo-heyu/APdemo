@@ -4,7 +4,6 @@
 
 - [WiFi 连接实现细节](connection/WIFI_CONNECTION_SPECIFIER.md) - WifiNetworkSpecifier 详细实现、废弃模块说明
 - [HTTP 接口文档](http/http_frontend.md) - 后端 API 接口规范
-- [需求文档](http/requirements.md) - 功能需求说明
 - [漫游实现分析](roaming/ROAMING_IMPLEMENTATION_ANALYSIS.md) - 漫游算法与日志系统分析
 - [新AP选择模型](new_ap_selection/README.md) - Video Only 模型特征、转换与集成指南
 
